@@ -1,0 +1,9 @@
+export { default as versions } from './versions';
+export { default as login } from './login';
+export { default as rooms } from './rooms';
+export { default as sync } from './sync';
+export { default as profile } from './profile';
+export { default as media } from './media';
+export { default as voip } from './voip';
+export { default as keys } from './keys';
+export { default as federation } from './federation';

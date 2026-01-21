@@ -1,0 +1,139 @@
+// Matrix profile endpoints
+
+import { Hono } from 'hono';
+import type { AppEnv } from '../types';
+import { Errors } from '../utils/errors';
+import { requireAuth, optionalAuth } from '../middleware/auth';
+import { getUserById, updateUserProfile } from '../services/database';
+import { parseUserId, isLocalServerName } from '../utils/ids';
+
+const app = new Hono<AppEnv>();
+
+// GET /_matrix/client/v3/profile/:userId - Get user profile
+app.get('/_matrix/client/v3/profile/:userId', optionalAuth(), async (c) => {
+  const targetUserId = decodeURIComponent(c.req.param('userId'));
+
+  // Check if this is a local user
+  const parsed = parseUserId(targetUserId);
+  if (!parsed) {
+    return Errors.invalidParam('user_id', 'Invalid user ID format').toResponse();
+  }
+
+  if (!isLocalServerName(parsed.serverName, c.env.SERVER_NAME)) {
+    // Remote user - would need federation lookup
+    return Errors.notFound('User not found').toResponse();
+  }
+
+  const user = await getUserById(c.env.DB, targetUserId);
+  if (!user) {
+    return Errors.notFound('User not found').toResponse();
+  }
+
+  console.log('[profile] Fetching profile for:', targetUserId, {
+    hasDisplayName: !!user.display_name,
+    hasAvatar: !!user.avatar_url,
+  });
+
+  // Always return both fields (even if null) to indicate user exists
+  // Element X uses this to verify users from directory search
+  return c.json({
+    displayname: user.display_name || null,
+    avatar_url: user.avatar_url || null,
+  });
+});
+
+// GET /_matrix/client/v3/profile/:userId/displayname - Get display name
+app.get('/_matrix/client/v3/profile/:userId/displayname', optionalAuth(), async (c) => {
+  const targetUserId = decodeURIComponent(c.req.param('userId'));
+
+  const parsed = parseUserId(targetUserId);
+  if (!parsed) {
+    return Errors.invalidParam('user_id', 'Invalid user ID format').toResponse();
+  }
+
+  if (!isLocalServerName(parsed.serverName, c.env.SERVER_NAME)) {
+    return Errors.notFound('User not found').toResponse();
+  }
+
+  const user = await getUserById(c.env.DB, targetUserId);
+  if (!user) {
+    return Errors.notFound('User not found').toResponse();
+  }
+
+  return c.json({
+    displayname: user.display_name || null,
+  });
+});
+
+// PUT /_matrix/client/v3/profile/:userId/displayname - Set display name
+app.put('/_matrix/client/v3/profile/:userId/displayname', requireAuth(), async (c) => {
+  const userId = c.get('userId');
+  const targetUserId = decodeURIComponent(c.req.param('userId'));
+
+  // Can only change own profile
+  if (userId !== targetUserId) {
+    return Errors.forbidden('Cannot modify another user\'s profile').toResponse();
+  }
+
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return Errors.badJson().toResponse();
+  }
+
+  const { displayname } = body;
+
+  await updateUserProfile(c.env.DB, userId, displayname);
+
+  return c.json({});
+});
+
+// GET /_matrix/client/v3/profile/:userId/avatar_url - Get avatar URL
+app.get('/_matrix/client/v3/profile/:userId/avatar_url', optionalAuth(), async (c) => {
+  const targetUserId = decodeURIComponent(c.req.param('userId'));
+
+  const parsed = parseUserId(targetUserId);
+  if (!parsed) {
+    return Errors.invalidParam('user_id', 'Invalid user ID format').toResponse();
+  }
+
+  if (!isLocalServerName(parsed.serverName, c.env.SERVER_NAME)) {
+    return Errors.notFound('User not found').toResponse();
+  }
+
+  const user = await getUserById(c.env.DB, targetUserId);
+  if (!user) {
+    return Errors.notFound('User not found').toResponse();
+  }
+
+  return c.json({
+    avatar_url: user.avatar_url || null,
+  });
+});
+
+// PUT /_matrix/client/v3/profile/:userId/avatar_url - Set avatar URL
+app.put('/_matrix/client/v3/profile/:userId/avatar_url', requireAuth(), async (c) => {
+  const userId = c.get('userId');
+  const targetUserId = decodeURIComponent(c.req.param('userId'));
+
+  // Can only change own profile
+  if (userId !== targetUserId) {
+    return Errors.forbidden('Cannot modify another user\'s profile').toResponse();
+  }
+
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return Errors.badJson().toResponse();
+  }
+
+  const { avatar_url } = body;
+
+  await updateUserProfile(c.env.DB, userId, undefined, avatar_url);
+
+  return c.json({});
+});
+
+export default app;

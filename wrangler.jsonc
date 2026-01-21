@@ -1,0 +1,163 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "matrix-homeserver",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "account_id": "YOUR_ACCOUNT_ID",
+
+  "observability": {
+    "enabled": true
+  },
+
+  // D1 Database for relational data (users, rooms, events, memberships)
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "matrix-db",
+      "database_id": "YOUR_DATABASE_ID"
+    }
+  ],
+
+  // KV Namespaces for fast lookups
+  "kv_namespaces": [
+    {
+      "binding": "SESSIONS",
+      "id": "YOUR_SESSIONS_KV_ID"
+    },
+    {
+      "binding": "DEVICE_KEYS",
+      "id": "YOUR_DEVICE_KEYS_KV_ID"
+    },
+    {
+      "binding": "CACHE",
+      "id": "YOUR_CACHE_KV_ID"
+    },
+    {
+      "binding": "CROSS_SIGNING_KEYS",
+      "id": "YOUR_CROSS_SIGNING_KEYS_KV_ID"
+    },
+    {
+      "binding": "ACCOUNT_DATA",
+      "id": "YOUR_ACCOUNT_DATA_KV_ID"
+    },
+    {
+      "binding": "ONE_TIME_KEYS",
+      "id": "YOUR_ONE_TIME_KEYS_KV_ID"
+    }
+  ],
+
+  // R2 Bucket for media storage
+  "r2_buckets": [
+    {
+      "binding": "MEDIA",
+      "bucket_name": "matrix-media"
+    }
+  ],
+
+  // Durable Objects for real-time sync and room coordination
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ROOMS",
+        "class_name": "RoomDurableObject"
+      },
+      {
+        "name": "SYNC",
+        "class_name": "SyncDurableObject"
+      },
+      {
+        "name": "FEDERATION",
+        "class_name": "FederationDurableObject"
+      },
+      {
+        "name": "CALL_ROOMS",
+        "class_name": "CallRoomDurableObject"
+      },
+      {
+        "name": "ADMIN",
+        "class_name": "AdminDurableObject"
+      },
+      {
+        "name": "USER_KEYS",
+        "class_name": "UserKeysDurableObject"
+      },
+      {
+        "name": "PUSH",
+        "class_name": "PushDurableObject"
+      }
+    ]
+  },
+
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["RoomDurableObject", "SyncDurableObject", "FederationDurableObject"]
+    },
+    {
+      "tag": "v2",
+      "new_classes": ["CallRoomDurableObject"]
+    },
+    {
+      "tag": "v3",
+      "new_classes": ["AdminDurableObject"]
+    },
+    {
+      "tag": "v4",
+      "new_classes": ["UserKeysDurableObject"]
+    },
+    {
+      "tag": "v5",
+      "new_classes": ["PushDurableObject"]
+    }
+  ],
+
+  // Environment variables
+  "vars": {
+    "SERVER_NAME": "matrix.example.com",
+    "SERVER_VERSION": "0.1.0",
+    "TURN_KEY_ID": "YOUR_TURN_KEY_ID",
+    "LIVEKIT_API_KEY": "YOUR_LIVEKIT_API_KEY",
+    "LIVEKIT_URL": "wss://livekit.example.com"
+  },
+
+  // Secrets should be set using:
+  // npx wrangler secret put TURN_API_TOKEN
+  // npx wrangler secret put CALLS_APP_ID
+  // npx wrangler secret put CALLS_APP_SECRET
+  // npx wrangler secret put LIVEKIT_API_SECRET
+  //
+  // For direct APNs push notifications (optional - bypasses Sygnal):
+  // npx wrangler secret put APNS_KEY_ID      # Key ID from Apple Developer Portal
+  // npx wrangler secret put APNS_TEAM_ID     # Apple Developer Team ID
+  // npx wrangler secret put APNS_PRIVATE_KEY # Contents of .p8 file
+  // npx wrangler secret put APNS_ENVIRONMENT # "production" or "sandbox" (default: production)
+  //
+  // To create a Cloudflare Realtime SFU app:
+  // 1. Go to https://dash.cloudflare.com/?to=/:account/calls
+  // 2. Create a new Realtime App
+  // 3. Copy the App ID and App Secret
+  // Or use the API: https://developers.cloudflare.com/api/resources/calls/subresources/sfu/methods/create/
+
+  // Custom domain routing (uncomment and update for production)
+  // "routes": [
+  //   {
+  //     "pattern": "matrix.example.com",
+  //     "custom_domain": true
+  //   }
+  // ],
+
+  // Cloudflare Workflows for durable multi-step operations
+  "workflows": [
+    {
+      "name": "room-join-workflow",
+      "binding": "ROOM_JOIN_WORKFLOW",
+      "class_name": "RoomJoinWorkflow"
+    },
+    {
+      "name": "push-notification-workflow",
+      "binding": "PUSH_NOTIFICATION_WORKFLOW",
+      "class_name": "PushNotificationWorkflow"
+    }
+  ]
+}

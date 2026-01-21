@@ -1,0 +1,819 @@
+// Matrix key management endpoints (E2EE)
+// Implements: https://spec.matrix.org/v1.12/client-server-api/#end-to-end-encryption
+//
+// This module handles:
+// - Device key upload/query
+// - One-time key management
+// - Cross-signing keys (master, self-signing, user-signing)
+// - Key change tracking
+//
+// IMPORTANT: Cross-signing keys use Durable Objects for strong consistency.
+// Per the Cloudflare blog: "Some operations can't tolerate eventual consistency"
+// D1 has eventual consistency across read replicas, which breaks E2EE bootstrap.
+
+import { Hono } from 'hono';
+import type { AppEnv, Env } from '../types';
+import { Errors } from '../utils/errors';
+import { requireAuth } from '../middleware/auth';
+import { verifyPassword } from '../utils/crypto';
+import { generateOpaqueId } from '../utils/ids';
+import { getPasswordHash } from '../services/database';
+
+const app = new Hono<AppEnv>();
+
+// Helper to get the UserKeys Durable Object stub for a user
+function getUserKeysDO(env: Env, userId: string): DurableObjectStub {
+  const id = env.USER_KEYS.idFromName(userId);
+  return env.USER_KEYS.get(id);
+}
+
+// Fetch cross-signing keys from Durable Object (strongly consistent)
+async function getCrossSigningKeysFromDO(env: Env, userId: string): Promise<{
+  master?: any;
+  self_signing?: any;
+  user_signing?: any;
+}> {
+  const stub = getUserKeysDO(env, userId);
+  const response = await stub.fetch(new Request('http://internal/cross-signing/get'));
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => 'unknown error');
+    console.error('[keys] DO cross-signing get failed:', response.status, errorText);
+    throw new Error(`DO cross-signing get failed: ${response.status} - ${errorText}`);
+  }
+
+  return await response.json();
+}
+
+// Store cross-signing keys in Durable Object (strongly consistent)
+async function putCrossSigningKeysToDO(env: Env, userId: string, keys: {
+  master?: any;
+  self_signing?: any;
+  user_signing?: any;
+}): Promise<void> {
+  const stub = getUserKeysDO(env, userId);
+  const response = await stub.fetch(new Request('http://internal/cross-signing/put', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(keys),
+  }));
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => 'unknown error');
+    console.error('[keys] DO cross-signing put failed:', response.status, errorText);
+    throw new Error(`DO cross-signing put failed: ${response.status} - ${errorText}`);
+  }
+}
+
+// Fetch device keys from Durable Object (strongly consistent)
+async function getDeviceKeysFromDO(env: Env, userId: string, deviceId?: string): Promise<any> {
+  const stub = getUserKeysDO(env, userId);
+  const url = deviceId
+    ? `http://internal/device-keys/get?device_id=${encodeURIComponent(deviceId)}`
+    : 'http://internal/device-keys/get';
+  const response = await stub.fetch(new Request(url));
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => 'unknown error');
+    console.error('[keys] DO device-keys get failed:', response.status, errorText, 'deviceId:', deviceId);
+    throw new Error(`DO device-keys get failed: ${response.status} - ${errorText}`);
+  }
+
+  return await response.json();
+}
+
+// Store device keys in Durable Object (strongly consistent)
+async function putDeviceKeysToDO(env: Env, userId: string, deviceId: string, keys: any): Promise<void> {
+  const stub = getUserKeysDO(env, userId);
+  const response = await stub.fetch(new Request('http://internal/device-keys/put', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ device_id: deviceId, keys }),
+  }));
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => 'unknown error');
+    console.error('[keys] DO device-keys put failed:', response.status, errorText, 'deviceId:', deviceId);
+    throw new Error(`DO device-keys put failed: ${response.status} - ${errorText}`);
+  }
+}
+
+
+// ============================================
+// Helper Functions
+// ============================================
+
+async function getNextStreamPosition(db: D1Database, streamName: string): Promise<number> {
+  await db.prepare(`
+    UPDATE stream_positions SET position = position + 1 WHERE stream_name = ?
+  `).bind(streamName).run();
+
+  const result = await db.prepare(`
+    SELECT position FROM stream_positions WHERE stream_name = ?
+  `).bind(streamName).first<{ position: number }>();
+
+  return result?.position || 1;
+}
+
+async function recordKeyChange(db: D1Database, userId: string, deviceId: string | null, changeType: string): Promise<void> {
+  const streamPosition = await getNextStreamPosition(db, 'device_keys');
+
+  await db.prepare(`
+    INSERT INTO device_key_changes (user_id, device_id, change_type, stream_position)
+    VALUES (?, ?, ?, ?)
+  `).bind(userId, deviceId, changeType, streamPosition).run();
+}
+
+// ============================================
+// Device Keys
+// ============================================
+
+// POST /_matrix/client/v3/keys/upload - Upload device keys and one-time keys
+app.post('/_matrix/client/v3/keys/upload', requireAuth(), async (c) => {
+  const userId = c.get('userId');
+  const deviceId = c.get('deviceId');
+  const db = c.env.DB;
+
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return Errors.badJson().toResponse();
+  }
+
+  const { device_keys, one_time_keys, fallback_keys } = body;
+
+  // Store device keys with strong consistency
+  if (device_keys) {
+    // Validate device_keys structure
+    if (device_keys.user_id !== userId || device_keys.device_id !== deviceId) {
+      return c.json({
+        errcode: 'M_INVALID_PARAM',
+        error: 'device_keys.user_id and device_keys.device_id must match authenticated user',
+      }, 400);
+    }
+
+    // Write to Durable Object first (primary - strongly consistent)
+    // This is critical for E2EE bootstrap where client uploads then immediately queries
+    await putDeviceKeysToDO(c.env, userId, deviceId!, device_keys);
+
+    // Also write to KV as backup/cache
+    await c.env.DEVICE_KEYS.put(
+      `device:${userId}:${deviceId}`,
+      JSON.stringify(device_keys)
+    );
+
+    // Record key change for /keys/changes
+    await recordKeyChange(db, userId, deviceId, 'update');
+  }
+
+  // Store one-time keys in KV for fast access
+  const oneTimeKeyCounts: Record<string, number> = {};
+
+  if (one_time_keys) {
+    // Get existing keys from KV
+    const existingKeys = await c.env.ONE_TIME_KEYS.get(
+      `otk:${userId}:${deviceId}`,
+      'json'
+    ) as Record<string, { keyId: string; keyData: any; claimed: boolean }[]> | null || {};
+
+    for (const [keyId, keyData] of Object.entries(one_time_keys)) {
+      const [algorithm] = keyId.split(':');
+
+      if (!existingKeys[algorithm]) {
+        existingKeys[algorithm] = [];
+      }
+
+      // Check if key already exists
+      const existingIndex = existingKeys[algorithm].findIndex(k => k.keyId === keyId);
+      if (existingIndex >= 0) {
+        existingKeys[algorithm][existingIndex] = { keyId, keyData, claimed: false };
+      } else {
+        existingKeys[algorithm].push({ keyId, keyData, claimed: false });
+      }
+
+      // Also write to D1 as backup
+      await db.prepare(`
+        INSERT INTO one_time_keys (user_id, device_id, algorithm, key_id, key_data)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (user_id, device_id, algorithm, key_id) DO UPDATE SET
+          key_data = excluded.key_data
+      `).bind(
+        userId,
+        deviceId,
+        algorithm,
+        keyId,
+        JSON.stringify(keyData)
+      ).run();
+    }
+
+    // Save back to KV
+    await c.env.ONE_TIME_KEYS.put(
+      `otk:${userId}:${deviceId}`,
+      JSON.stringify(existingKeys)
+    );
+
+    // Count unclaimed keys
+    for (const [algorithm, keys] of Object.entries(existingKeys)) {
+      oneTimeKeyCounts[algorithm] = keys.filter(k => !k.claimed).length;
+    }
+  } else {
+    // Just get counts from KV
+    const existingKeys = await c.env.ONE_TIME_KEYS.get(
+      `otk:${userId}:${deviceId}`,
+      'json'
+    ) as Record<string, { keyId: string; keyData: any; claimed: boolean }[]> | null;
+
+    if (existingKeys) {
+      for (const [algorithm, keys] of Object.entries(existingKeys)) {
+        oneTimeKeyCounts[algorithm] = keys.filter(k => !k.claimed).length;
+      }
+    }
+  }
+
+  // Store fallback keys
+  if (fallback_keys) {
+    for (const [keyId, keyData] of Object.entries(fallback_keys)) {
+      const [algorithm] = keyId.split(':');
+
+      await db.prepare(`
+        INSERT INTO fallback_keys (user_id, device_id, algorithm, key_id, key_data)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (user_id, device_id, algorithm) DO UPDATE SET
+          key_id = excluded.key_id,
+          key_data = excluded.key_data,
+          used = 0
+      `).bind(userId, deviceId, algorithm, keyId, JSON.stringify(keyData)).run();
+    }
+  }
+
+  return c.json({
+    one_time_key_counts: oneTimeKeyCounts,
+  });
+});
+
+// POST /_matrix/client/v3/keys/query - Query device keys for users
+app.post('/_matrix/client/v3/keys/query', requireAuth(), async (c) => {
+  const db = c.env.DB;
+
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return Errors.badJson().toResponse();
+  }
+
+  const { device_keys: requestedKeys } = body;
+
+  const deviceKeys: Record<string, Record<string, any>> = {};
+  const masterKeys: Record<string, any> = {};
+  const selfSigningKeys: Record<string, any> = {};
+  const userSigningKeys: Record<string, any> = {};
+  const failures: Record<string, any> = {};
+
+  // Helper function to merge signatures from DB into device keys
+  async function mergeSignaturesForDevice(userId: string, deviceId: string, deviceKey: any): Promise<any> {
+    // Get any additional signatures from the database
+    const dbSignatures = await db.prepare(`
+      SELECT signer_user_id, signer_key_id, signature
+      FROM cross_signing_signatures
+      WHERE user_id = ? AND key_id = ?
+    `).bind(userId, deviceId).all<{
+      signer_user_id: string;
+      signer_key_id: string;
+      signature: string;
+    }>();
+
+    if (dbSignatures.results.length > 0) {
+      deviceKey.signatures = deviceKey.signatures || {};
+      for (const sig of dbSignatures.results) {
+        deviceKey.signatures[sig.signer_user_id] = deviceKey.signatures[sig.signer_user_id] || {};
+        deviceKey.signatures[sig.signer_user_id][sig.signer_key_id] = sig.signature;
+      }
+    }
+
+    return deviceKey;
+  }
+
+  if (requestedKeys) {
+    for (const [userId, devices] of Object.entries(requestedKeys)) {
+      deviceKeys[userId] = {};
+
+      // Get device keys from Durable Object (strongly consistent)
+      // Critical for E2EE bootstrap where client uploads then immediately queries
+      const requestedDevices = Array.isArray(devices) && devices.length > 0 ? devices : null;
+
+      if (requestedDevices === null || requestedDevices.length === 0) {
+        // Get all devices for this user from Durable Object
+        const allDeviceKeys = await getDeviceKeysFromDO(c.env, userId);
+        for (const [deviceId, keys] of Object.entries(allDeviceKeys)) {
+          if (keys) {
+            // Merge any DB signatures into the device keys
+            deviceKeys[userId][deviceId] = await mergeSignaturesForDevice(userId, deviceId, keys);
+          }
+        }
+      } else {
+        // Get specific devices from Durable Object
+        for (const deviceId of requestedDevices) {
+          const keys = await getDeviceKeysFromDO(c.env, userId, deviceId);
+          if (keys) {
+            // Merge any DB signatures into the device keys
+            deviceKeys[userId][deviceId] = await mergeSignaturesForDevice(userId, deviceId, keys);
+          }
+        }
+      }
+
+      // Get cross-signing keys from Durable Object (strongly consistent)
+      // Per Cloudflare blog: D1 has eventual consistency across read replicas.
+      // Durable Objects provide single-threaded, atomic storage - critical for
+      // E2EE bootstrap where client uploads then immediately queries keys.
+      const requestingUserId = c.get('userId');
+
+      const csKeys = await getCrossSigningKeysFromDO(c.env, userId);
+
+      if (csKeys.master) {
+        masterKeys[userId] = csKeys.master;
+      }
+      if (csKeys.self_signing) {
+        selfSigningKeys[userId] = csKeys.self_signing;
+      }
+      // Only return user_signing key if querying own keys
+      if (csKeys.user_signing && userId === requestingUserId) {
+        userSigningKeys[userId] = csKeys.user_signing;
+      }
+    }
+  }
+
+  return c.json({
+    device_keys: deviceKeys,
+    master_keys: masterKeys,
+    self_signing_keys: selfSigningKeys,
+    user_signing_keys: userSigningKeys,
+    failures,
+  });
+});
+
+// POST /_matrix/client/v3/keys/claim - Claim one-time keys for establishing sessions
+app.post('/_matrix/client/v3/keys/claim', requireAuth(), async (c) => {
+  const db = c.env.DB;
+
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return Errors.badJson().toResponse();
+  }
+
+  const { one_time_keys: requestedKeys } = body;
+
+  const oneTimeKeys: Record<string, Record<string, Record<string, any>>> = {};
+  const failures: Record<string, any> = {};
+
+  if (requestedKeys) {
+    for (const [userId, devices] of Object.entries(requestedKeys)) {
+      oneTimeKeys[userId] = {};
+
+      for (const [deviceId, algorithm] of Object.entries(devices as Record<string, string>)) {
+        // Try to claim a one-time key from KV first
+        const existingKeys = await c.env.ONE_TIME_KEYS.get(
+          `otk:${userId}:${deviceId}`,
+          'json'
+        ) as Record<string, { keyId: string; keyData: any; claimed: boolean }[]> | null;
+
+        let foundKey = false;
+
+        if (existingKeys && existingKeys[algorithm]) {
+          // Find first unclaimed key
+          const keyIndex = existingKeys[algorithm].findIndex(k => !k.claimed);
+          if (keyIndex >= 0) {
+            const key = existingKeys[algorithm][keyIndex];
+            // Mark as claimed
+            existingKeys[algorithm][keyIndex].claimed = true;
+
+            // Save back to KV
+            await c.env.ONE_TIME_KEYS.put(
+              `otk:${userId}:${deviceId}`,
+              JSON.stringify(existingKeys)
+            );
+
+            // Also mark in D1
+            await db.prepare(`
+              UPDATE one_time_keys SET claimed = 1, claimed_at = ?
+              WHERE user_id = ? AND device_id = ? AND key_id = ?
+            `).bind(Date.now(), userId, deviceId, key.keyId).run();
+
+            oneTimeKeys[userId][deviceId] = {
+              [key.keyId]: key.keyData,
+            };
+            foundKey = true;
+          }
+        }
+
+        if (!foundKey) {
+          // Fallback to D1 for legacy keys
+          const otk = await db.prepare(`
+            SELECT id, key_id, key_data FROM one_time_keys
+            WHERE user_id = ? AND device_id = ? AND algorithm = ? AND claimed = 0
+            LIMIT 1
+          `).bind(userId, deviceId, algorithm).first<{
+            id: number;
+            key_id: string;
+            key_data: string;
+          }>();
+
+          if (otk) {
+            // Mark as claimed
+            await db.prepare(`
+              UPDATE one_time_keys SET claimed = 1, claimed_at = ? WHERE id = ?
+            `).bind(Date.now(), otk.id).run();
+
+            oneTimeKeys[userId][deviceId] = {
+              [otk.key_id]: JSON.parse(otk.key_data),
+            };
+            foundKey = true;
+          }
+        }
+
+        if (!foundKey) {
+          // Try fallback key
+          const fallback = await db.prepare(`
+            SELECT key_id, key_data, used FROM fallback_keys
+            WHERE user_id = ? AND device_id = ? AND algorithm = ?
+          `).bind(userId, deviceId, algorithm).first<{
+            key_id: string;
+            key_data: string;
+            used: number;
+          }>();
+
+          if (fallback) {
+            // Mark fallback as used
+            await db.prepare(`
+              UPDATE fallback_keys SET used = 1 WHERE user_id = ? AND device_id = ? AND algorithm = ?
+            `).bind(userId, deviceId, algorithm).run();
+
+            const keyData = JSON.parse(fallback.key_data);
+            oneTimeKeys[userId][deviceId] = {
+              [fallback.key_id]: {
+                ...keyData,
+                fallback: true,
+              },
+            };
+          }
+        }
+      }
+    }
+  }
+
+  return c.json({
+    one_time_keys: oneTimeKeys,
+    failures,
+  });
+});
+
+// GET /_matrix/client/v3/keys/changes - Get users whose keys have changed
+app.get('/_matrix/client/v3/keys/changes', requireAuth(), async (c) => {
+  const userId = c.get('userId');
+  const from = c.req.query('from');
+  const to = c.req.query('to');
+  const db = c.env.DB;
+
+  if (!from || !to) {
+    return Errors.missingParam('from and to required').toResponse();
+  }
+
+  const fromPosition = parseInt(from, 10) || 0;
+  const toPosition = parseInt(to, 10) || Number.MAX_SAFE_INTEGER;
+
+  // Get users whose keys changed in this range
+  // Only return users that share rooms with the requesting user
+  const changes = await db.prepare(`
+    SELECT DISTINCT dkc.user_id, dkc.change_type
+    FROM device_key_changes dkc
+    WHERE dkc.stream_position > ? AND dkc.stream_position <= ?
+      AND dkc.user_id IN (
+        SELECT DISTINCT rm2.user_id
+        FROM room_memberships rm1
+        JOIN room_memberships rm2 ON rm1.room_id = rm2.room_id
+        WHERE rm1.user_id = ? AND rm1.membership = 'join' AND rm2.membership = 'join'
+      )
+  `).bind(fromPosition, toPosition, userId).all<{
+    user_id: string;
+    change_type: string;
+  }>();
+
+  const changed: string[] = [];
+  const left: string[] = [];
+
+  for (const change of changes.results) {
+    if (change.change_type === 'delete') {
+      left.push(change.user_id);
+    } else {
+      changed.push(change.user_id);
+    }
+  }
+
+  return c.json({
+    changed: [...new Set(changed)],
+    left: [...new Set(left)],
+  });
+});
+
+// ============================================
+// Cross-Signing Keys
+// ============================================
+
+// POST /_matrix/client/v3/keys/device_signing/upload - Upload cross-signing keys
+// Spec: https://spec.matrix.org/v1.12/client-server-api/#post_matrixclientv3keysdevice_signingupload
+// This endpoint requires UIA (User-Interactive Authentication)
+app.post('/_matrix/client/v3/keys/device_signing/upload', requireAuth(), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return Errors.badJson().toResponse();
+  }
+
+  const { master_key, self_signing_key, user_signing_key, auth } = body;
+
+  // Debug logging for cross-signing key uploads
+  console.log('[keys] Cross-signing upload for user:', userId);
+  console.log('[keys] Auth provided:', auth ? JSON.stringify(auth) : 'none');
+  if (master_key) console.log('[keys] Master key:', JSON.stringify(master_key));
+  if (self_signing_key) console.log('[keys] Self-signing key:', JSON.stringify(self_signing_key));
+  if (user_signing_key) console.log('[keys] User-signing key:', JSON.stringify(user_signing_key));
+
+  // Check if user already has cross-signing keys set up
+  const existingKeys = await db.prepare(`
+    SELECT COUNT(*) as count FROM cross_signing_keys WHERE user_id = ?
+  `).bind(userId).first<{ count: number }>();
+
+  const hasExistingKeys = (existingKeys?.count || 0) > 0;
+  console.log('[keys] User has existing keys:', hasExistingKeys);
+
+  // MSC3967: Do not require UIA when first uploading cross-signing keys
+  // Per Matrix spec v1.11+, if user has NO existing cross-signing keys, skip UIA for first-time setup
+  // If user HAS existing keys, require password authentication
+  if (!hasExistingKeys) {
+    // First-time cross-signing setup - skip UIA per MSC3967
+    console.log('[keys] First-time cross-signing setup - skipping UIA per MSC3967');
+  } else if (!auth) {
+    // User has existing keys but no auth provided - return UIA challenge
+    const sessionId = await generateOpaqueId(16);
+
+    // Store session in KV for validation
+    await c.env.CACHE.put(
+      `uia_session:${sessionId}`,
+      JSON.stringify({
+        user_id: userId,
+        created_at: Date.now(),
+        type: 'device_signing_upload',
+        completed_stages: [],
+      }),
+      { expirationTtl: 300 } // 5 minute session
+    );
+
+    console.log('[keys] UIA required (existing keys), returning challenge with session:', sessionId);
+
+    // Return UIA challenge - require password for key replacement
+    return c.json({
+      flows: [
+        { stages: ['m.login.password'] },
+      ],
+      params: {},
+      session: sessionId,
+    }, 401);
+  } else {
+    // Auth provided for key replacement - validate it
+    console.log('[keys] Auth type:', auth.type);
+
+    if (auth.type === 'm.login.password') {
+      // Validate password
+      const storedHash = await getPasswordHash(db, userId);
+      if (!storedHash) {
+        console.log('[keys] No password hash found for user');
+        return Errors.forbidden('No password set for user').toResponse();
+      }
+
+      if (!auth.password) {
+        console.log('[keys] No password in auth object');
+        return Errors.missingParam('auth.password').toResponse();
+      }
+
+      const valid = await verifyPassword(auth.password, storedHash);
+      if (!valid) {
+        console.log('[keys] Invalid password');
+        return Errors.forbidden('Invalid password').toResponse();
+      }
+
+      console.log('[keys] Password validated successfully');
+    } else {
+      // Unknown auth type
+      console.log('[keys] Unknown auth type:', auth.type);
+      return c.json({
+        errcode: 'M_UNRECOGNIZED',
+        error: `Unrecognized auth type: ${auth.type}`,
+      }, 400);
+    }
+  }
+
+  // UIA passed - check if SSSS is set up (for logging purposes only)
+  // We allow cross-signing key uploads even without SSSS, as Element X may set up
+  // SSSS immediately after uploading cross-signing keys during the bootstrap flow.
+  // The "confirm your identity" screen in Element X is EXPECTED for new users -
+  // it prompts them to set up recovery/SSSS.
+  const ssssDefault = await c.env.ACCOUNT_DATA.get(
+    `global:${userId}:m.secret_storage.default_key`,
+    'json'
+  ) as { key?: string } | null;
+
+  let hasValidSSS = !!(ssssDefault && ssssDefault.key);
+  if (!hasValidSSS) {
+    // Also check D1 as fallback
+    const d1Ssss = await db.prepare(`
+      SELECT content FROM account_data
+      WHERE user_id = ? AND event_type = 'm.secret_storage.default_key' AND room_id = ''
+    `).bind(userId).first<{ content: string }>();
+
+    if (d1Ssss) {
+      try {
+        const parsed = JSON.parse(d1Ssss.content);
+        hasValidSSS = !!parsed.key;
+      } catch {
+        hasValidSSS = false;
+      }
+    }
+  }
+
+  if (!hasValidSSS) {
+    // SSSS is not set up yet - this is OK, Element X will prompt user to set up recovery
+    // Cross-signing keys can be uploaded before SSSS during initial bootstrap
+    console.log('[keys] SSSS not configured for user', userId, '- allowing cross-signing upload (client will prompt for recovery setup)');
+  } else {
+    console.log('[keys] SSSS is configured, proceeding to store cross-signing keys');
+  }
+
+  // Get existing keys from Durable Object (strongly consistent)
+  const existingCSKeys = await getCrossSigningKeysFromDO(c.env, userId);
+
+  // Merge new keys with existing
+  const csKeys = { ...existingCSKeys };
+  if (master_key) csKeys.master = master_key;
+  if (self_signing_key) csKeys.self_signing = self_signing_key;
+  if (user_signing_key) csKeys.user_signing = user_signing_key;
+
+  // Write to Durable Object (primary - strongly consistent)
+  // This is critical for E2EE bootstrap where client uploads then immediately queries
+  await putCrossSigningKeysToDO(c.env, userId, csKeys);
+  console.log('[keys] Cross-signing keys stored in Durable Object for user:', userId);
+
+  // Also write to D1 as backup (for durability/recovery)
+  // These writes are eventually consistent but serve as backup storage
+  if (master_key) {
+    const keyId = Object.keys(master_key.keys || {})[0] || '';
+    await db.prepare(`
+      INSERT INTO cross_signing_keys (user_id, key_type, key_id, key_data)
+      VALUES (?, 'master', ?, ?)
+      ON CONFLICT (user_id, key_type) DO UPDATE SET
+        key_id = excluded.key_id,
+        key_data = excluded.key_data
+    `).bind(userId, keyId, JSON.stringify(master_key)).run();
+    await recordKeyChange(db, userId, null, 'update');
+  }
+
+  if (self_signing_key) {
+    const keyId = Object.keys(self_signing_key.keys || {})[0] || '';
+    await db.prepare(`
+      INSERT INTO cross_signing_keys (user_id, key_type, key_id, key_data)
+      VALUES (?, 'self_signing', ?, ?)
+      ON CONFLICT (user_id, key_type) DO UPDATE SET
+        key_id = excluded.key_id,
+        key_data = excluded.key_data
+    `).bind(userId, keyId, JSON.stringify(self_signing_key)).run();
+  }
+
+  if (user_signing_key) {
+    const keyId = Object.keys(user_signing_key.keys || {})[0] || '';
+    await db.prepare(`
+      INSERT INTO cross_signing_keys (user_id, key_type, key_id, key_data)
+      VALUES (?, 'user_signing', ?, ?)
+      ON CONFLICT (user_id, key_type) DO UPDATE SET
+        key_id = excluded.key_id,
+        key_data = excluded.key_data
+    `).bind(userId, keyId, JSON.stringify(user_signing_key)).run();
+  }
+
+  // Write to KV as cache (eventually consistent, for performance)
+  await c.env.CROSS_SIGNING_KEYS.put(`user:${userId}`, JSON.stringify(csKeys));
+
+  return c.json({});
+});
+
+// POST /_matrix/client/v3/keys/signatures/upload - Upload signatures for keys
+// Spec: https://spec.matrix.org/v1.12/client-server-api/#post_matrixclientv3keyssignaturesupload
+// Body format: { user_id: { key_id: signed_key_object } }
+// - For device keys, key_id is the device_id (e.g., "JLAFKJWSCS")
+// - For cross-signing keys, key_id is the base64 public key
+app.post('/_matrix/client/v3/keys/signatures/upload', requireAuth(), async (c) => {
+  const signerUserId = c.get('userId');
+  const db = c.env.DB;
+
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return Errors.badJson().toResponse();
+  }
+
+  console.log('[signatures/upload] Request from:', signerUserId);
+  console.log('[signatures/upload] Body:', JSON.stringify(body));
+
+  // body is a map of user_id -> key_id -> signed_key_object
+  const failures: Record<string, Record<string, { errcode: string; error: string }>> = {};
+
+  for (const [userId, keys] of Object.entries(body)) {
+    for (const [keyId, signedKey] of Object.entries(keys as Record<string, any>)) {
+      try {
+        const signedKeyObj = signedKey as any;
+
+        // Extract signatures from the signed key object
+        const signatures = signedKeyObj.signatures?.[signerUserId] || {};
+
+        console.log('[signatures/upload] Processing:', { userId, keyId, hasDeviceId: !!signedKeyObj.device_id });
+        console.log('[signatures/upload] Signatures to store:', JSON.stringify(signatures));
+
+        // Store all signatures in the database
+        for (const [signerKeyId, signature] of Object.entries(signatures)) {
+          // Use the device_id as key_id for device keys, otherwise use the provided keyId
+          const effectiveKeyId = signedKeyObj.device_id || keyId;
+
+          await db.prepare(`
+            INSERT INTO cross_signing_signatures (
+              user_id, key_id, signer_user_id, signer_key_id, signature
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (user_id, key_id, signer_user_id, signer_key_id) DO UPDATE SET
+              signature = excluded.signature
+          `).bind(userId, effectiveKeyId, signerUserId, signerKeyId, signature as string).run();
+
+          console.log('[signatures/upload] Stored signature:', {
+            userId,
+            effectiveKeyId,
+            signerUserId,
+            signerKeyId
+          });
+        }
+
+        // If this is a device key (has device_id field), update the device key in KV
+        if (signedKeyObj.device_id) {
+          const deviceId = signedKeyObj.device_id;
+          console.log('[signatures/upload] Updating device key for device:', deviceId);
+
+          // Read from Durable Object (strongly consistent)
+          const existingKey = await getDeviceKeysFromDO(c.env, userId, deviceId);
+
+          if (existingKey) {
+            // Merge new signatures into existing signatures
+            existingKey.signatures = existingKey.signatures || {};
+            existingKey.signatures[signerUserId] = {
+              ...existingKey.signatures[signerUserId],
+              ...signatures,
+            };
+
+            // Write to Durable Object (primary - strongly consistent)
+            await putDeviceKeysToDO(c.env, userId, deviceId, existingKey);
+
+            // Also update KV as backup/cache
+            await c.env.DEVICE_KEYS.put(
+              `device:${userId}:${deviceId}`,
+              JSON.stringify(existingKey)
+            );
+
+            console.log('[signatures/upload] Updated device key signatures:', {
+              deviceId,
+              newSignatures: Object.keys(signatures)
+            });
+          } else {
+            console.log('[signatures/upload] Device key not found:', deviceId);
+          }
+        }
+
+        // Record key change for sync notifications
+        await recordKeyChange(db, userId, signedKeyObj.device_id || null, 'update');
+      } catch (err) {
+        console.error('[signatures/upload] Error processing signature:', err);
+        if (!failures[userId]) failures[userId] = {};
+        failures[userId][keyId] = {
+          errcode: 'M_UNKNOWN',
+          error: 'Failed to store signature',
+        };
+      }
+    }
+  }
+
+  console.log('[signatures/upload] Completed, failures:', Object.keys(failures).length > 0 ? failures : 'none');
+  return c.json({ failures });
+});
+
+export default app;
