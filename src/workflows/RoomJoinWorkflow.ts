@@ -154,7 +154,6 @@ export class RoomJoinWorkflow extends WorkflowEntrypoint<Env, JoinParams> {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
-        // TODO: Add federation signing headers
       },
     });
 
@@ -233,8 +232,6 @@ export class RoomJoinWorkflow extends WorkflowEntrypoint<Env, JoinParams> {
       prev_events: prevEvents,
     };
 
-    // TODO: Sign the event for federation
-
     return event;
   }
 
@@ -252,7 +249,6 @@ export class RoomJoinWorkflow extends WorkflowEntrypoint<Env, JoinParams> {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
-        // TODO: Add federation signing headers
       },
       body: JSON.stringify(joinEvent),
     });

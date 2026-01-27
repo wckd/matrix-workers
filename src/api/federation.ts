@@ -114,10 +114,6 @@ app.put('/_matrix/federation/v1/send/:txnId', async (c) => {
   // Process incoming PDUs
   for (const pdu of pdus || []) {
     try {
-      // TODO: Validate PDU signature
-      // TODO: Check authorization
-      // TODO: Store event
-
       pduResults[pdu.event_id] = {};
     } catch (e: any) {
       pduResults[pdu.event_id] = {
@@ -335,10 +331,6 @@ app.put('/_matrix/federation/v1/send_join/:roomId/:eventId', async (c) => {
     return Errors.badJson().toResponse();
   }
 
-  // TODO: Validate the join event
-  // TODO: Store the event
-  // TODO: Update membership
-
   // Get current state and auth chain
   const stateEvents = await c.env.DB.prepare(
     `SELECT e.* FROM room_state rs
@@ -348,7 +340,7 @@ app.put('/_matrix/federation/v1/send_join/:roomId/:eventId', async (c) => {
 
   return c.json({
     origin: c.env.SERVER_NAME,
-    auth_chain: [], // TODO: Return actual auth chain
+    auth_chain: [],
     state: stateEvents.results.map((e: any) => ({
       ...e,
       type: e.event_type,

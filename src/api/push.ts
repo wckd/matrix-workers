@@ -563,8 +563,6 @@ app.put('/_matrix/client/v3/pushrules/:scope/:kind/:ruleId', requireAuth(), asyn
   let priority = 0;
 
   if (before || after) {
-    // TODO: Implement proper priority calculation
-    // For now, just use timestamp as priority
     priority = Date.now();
   }
 

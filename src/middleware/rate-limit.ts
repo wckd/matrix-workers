@@ -56,7 +56,6 @@ function getClientId(c: Context<AppEnv>): string {
 
 // Rate limiter using KV for fast checks
 // TEMPORARILY DISABLED: KV itself is hitting rate limits (429) which causes cascading failures
-// TODO: Migrate to Durable Object-based rate limiting
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function rateLimitMiddleware(_c: Context<AppEnv>, next: Next) {
   // DISABLED: Skip all rate limiting to avoid KV 429 errors

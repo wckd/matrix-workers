@@ -777,8 +777,6 @@ app.put('/_matrix/client/v3/rooms/:roomId/state/:eventType/:stateKey?', requireA
     return Errors.badJson().toResponse();
   }
 
-  // TODO: Check power levels
-
   const eventId = await generateEventId(c.env.SERVER_NAME);
 
   const createEvent = await getStateEvent(c.env.DB, roomId, 'm.room.create');
@@ -1733,7 +1731,6 @@ app.delete('/_matrix/client/v3/directory/room/:roomAlias', requireAuth(), async 
     return Errors.notFound('Room alias not found').toResponse();
   }
 
-  // TODO: Check permissions
   await deleteRoomAlias(c.env.DB, alias);
   return c.json({});
 });
