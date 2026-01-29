@@ -470,9 +470,22 @@ app.get('/_matrix/client/v1/auth_metadata', async (c) => {
       'urn:matrix:org.matrix.msc2967.client:api:*',
       'urn:matrix:org.matrix.msc2967.client:device:*',
     ],
-    // Matrix authentication service extension (MSC3861)
+    // Matrix authentication service extension (MSC3861/MSC4191)
+    // account_management_uri is where users can manage their account
     account_management_uri: `${baseUrl}/admin`,
-    account_management_actions_supported: ['org.matrix.cross_signing_reset'],
+    // Supported account management actions per MSC4191
+    // Element X uses these to determine what features are available
+    account_management_actions_supported: [
+      'org.matrix.profile',              // View/edit profile
+      'org.matrix.sessions_list',        // View list of sessions  
+      'org.matrix.session_view',         // View details of a specific session
+      'org.matrix.session_end',          // End/logout a specific session
+      'org.matrix.cross_signing_reset',  // Reset cross-signing keys (identity reset)
+    ],
+    // Device authorization endpoint for QR code login (MSC4108)
+    device_authorization_endpoint: `${baseUrl}/oauth/device`,
+    // Prompt values we support
+    prompt_values_supported: ['create'],
   };
 
   return c.json(response);

@@ -590,11 +590,22 @@ app.post('/_matrix/client/v3/keys/device_signing/upload', requireAuth(), async (
 
     // Build available flows based on user's authentication method
     const flows: Array<{ stages: string[] }> = [];
+    const serverName = c.env.SERVER_NAME;
+    const baseUrl = `https://${serverName}`;
+    const params: Record<string, any> = {};
     
     if (userIsOIDC) {
-      // OIDC users: Offer SSO flow with token fallback
-      flows.push({ stages: ['m.login.sso'] });
-      flows.push({ stages: ['m.login.token'] });
+      // OIDC users: Use m.login.oauth per MSC3861/MSC2967
+      // The Matrix Rust SDK (used by Element X) expects this specific format
+      flows.push({ stages: ['m.login.oauth'] });
+      
+      // Provide OAuth approval URL for the client
+      // Element X will open this URL and wait for approval
+      params['m.login.oauth'] = {
+        // The URL where the user can approve the cross-signing reset
+        // This follows the format expected by matrix-rust-sdk
+        url: `${baseUrl}/oauth/authorize/uia?session=${sessionId}&action=org.matrix.cross_signing_reset`,
+      };
     }
     
     if (userHasPassword) {
@@ -602,31 +613,9 @@ app.post('/_matrix/client/v3/keys/device_signing/upload', requireAuth(), async (
       flows.push({ stages: ['m.login.password'] });
     }
     
-    // Fallback: If user has neither (shouldn't happen), offer all flows
+    // Fallback: If user has neither (shouldn't happen), offer password flow
     if (flows.length === 0) {
-      flows.push({ stages: ['m.login.sso'] });
       flows.push({ stages: ['m.login.password'] });
-    }
-
-    // Build SSO params for OIDC users
-    const serverName = c.env.SERVER_NAME;
-    const baseUrl = `https://${serverName}`;
-    const params: Record<string, any> = {};
-    
-    if (userIsOIDC) {
-      // Provide SSO redirect URI for the client
-      // The client should redirect the user to this URL to complete SSO UIA
-      params['m.login.sso'] = {
-        // Identity providers available for SSO
-        identity_providers: [
-          {
-            id: 'oidc',
-            name: 'Single Sign-On',
-            // The redirect URL includes the UIA session for callback
-            redirect_url: `${baseUrl}/_matrix/client/v3/auth/m.login.sso/redirect?session=${sessionId}`,
-          },
-        ],
-      };
     }
 
     // Store session in KV for validation
@@ -675,12 +664,12 @@ app.post('/_matrix/client/v3/keys/device_signing/upload', requireAuth(), async (
       }
 
       console.log('[keys] Password validated successfully');
-    } else if (auth.type === 'm.login.sso' || auth.type === 'm.login.token') {
-      // SSO/Token authentication for OIDC users
-      // Check if this session has been completed via SSO flow
+    } else if (auth.type === 'm.login.oauth' || auth.type === 'm.login.sso' || auth.type === 'm.login.token') {
+      // OAuth/SSO/Token authentication for OIDC users
+      // Check if this session has been completed via OAuth/SSO flow
       const sessionId = auth.session;
       if (!sessionId) {
-        console.log('[keys] No session ID in SSO auth');
+        console.log('[keys] No session ID in OAuth/SSO auth');
         return Errors.missingParam('auth.session').toResponse();
       }
 
@@ -701,17 +690,18 @@ app.post('/_matrix/client/v3/keys/device_signing/upload', requireAuth(), async (
         return Errors.forbidden('Session user mismatch').toResponse();
       }
 
-      // Check if SSO has been completed for this session
-      if (!session.completed_stages.includes('m.login.sso') && 
+      // Check if OAuth/SSO has been completed for this session
+      if (!session.completed_stages.includes('m.login.oauth') && 
+          !session.completed_stages.includes('m.login.sso') && 
           !session.completed_stages.includes('m.login.token')) {
-        console.log('[keys] SSO not completed for this session');
+        console.log('[keys] OAuth/SSO not completed for this session');
         return c.json({
           errcode: 'M_UNAUTHORIZED',
-          error: 'SSO authentication not completed. Please complete the SSO flow.',
+          error: 'OAuth authentication not completed. Please approve the request.',
         }, 401);
       }
 
-      console.log('[keys] SSO/Token authentication validated successfully');
+      console.log('[keys] OAuth/SSO/Token authentication validated successfully');
       
       // Clean up the session
       await c.env.CACHE.delete(`uia_session:${sessionId}`);

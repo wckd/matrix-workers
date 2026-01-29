@@ -826,4 +826,496 @@ function escapeHtml(str: string): string {
     .replace(/'/g, '&#039;');
 }
 
+// ============================================
+// OAuth UIA (User-Interactive Auth) for Cross-Signing
+// Per MSC3861/MSC2967, OIDC users use m.login.oauth for UIA
+// ============================================
+
+// GET /oauth/authorize/uia - Show approval page for UIA operations (e.g., cross-signing reset)
+app.get('/oauth/authorize/uia', async (c) => {
+  const sessionId = c.req.query('session');
+  const action = c.req.query('action');
+  const serverName = c.env.SERVER_NAME;
+
+  if (!sessionId) {
+    return c.html(generateUiaErrorPage('Missing Session', 'No UIA session specified.', serverName));
+  }
+
+  // Check if the UIA session exists
+  const sessionJson = await c.env.CACHE.get(`uia_session:${sessionId}`);
+  if (!sessionJson) {
+    return c.html(generateUiaErrorPage('Session Expired', 'This session has expired. Please try again.', serverName));
+  }
+
+  const session = JSON.parse(sessionJson);
+
+  // Determine what action is being requested
+  let actionTitle = 'Approve Request';
+  let actionDescription = 'An application is requesting your approval.';
+  
+  if (action === 'org.matrix.cross_signing_reset') {
+    actionTitle = 'Reset Encryption Keys';
+    actionDescription = 'An application is requesting to reset your encryption identity. This will allow you to set up encryption again, but you may lose access to old encrypted messages.';
+  }
+
+  // Generate approval page
+  return c.html(generateUiaApprovalPage(sessionId, session.user_id, actionTitle, actionDescription, serverName));
+});
+
+// POST /oauth/authorize/uia - Handle approval
+app.post('/oauth/authorize/uia', async (c) => {
+  const serverName = c.env.SERVER_NAME;
+
+  let body: any;
+  try {
+    body = await c.req.parseBody();
+  } catch {
+    return c.html(generateUiaErrorPage('Invalid Request', 'Could not parse request.', serverName));
+  }
+
+  const { session: sessionId, username, password, action: submitAction } = body;
+
+  if (!sessionId) {
+    return c.html(generateUiaErrorPage('Missing Session', 'No UIA session specified.', serverName));
+  }
+
+  // Check if the UIA session exists
+  const sessionJson = await c.env.CACHE.get(`uia_session:${sessionId}`);
+  if (!sessionJson) {
+    return c.html(generateUiaErrorPage('Session Expired', 'This session has expired. Please try again.', serverName));
+  }
+
+  const session = JSON.parse(sessionJson);
+
+  // Handle cancel action
+  if (submitAction === 'cancel') {
+    await c.env.CACHE.delete(`uia_session:${sessionId}`);
+    return c.html(generateUiaCancelledPage(serverName));
+  }
+
+  // Validate credentials
+  if (!username || !password) {
+    return c.html(generateUiaApprovalPage(
+      sessionId, 
+      session.user_id, 
+      'Reset Encryption Keys',
+      'Please enter your credentials to approve this request.',
+      serverName,
+      'Username and password are required.'
+    ));
+  }
+
+  // Verify the credentials
+  const db = c.env.DB;
+  const userId = formatUserId(username, serverName);
+  
+  // Check user exists
+  const user = await getUserById(db, userId);
+  if (!user) {
+    return c.html(generateUiaApprovalPage(
+      sessionId,
+      session.user_id,
+      'Reset Encryption Keys',
+      'Please enter your credentials to approve this request.',
+      serverName,
+      'Invalid username or password.'
+    ));
+  }
+
+  // Verify password
+  const passwordHash = await db.prepare(`
+    SELECT password_hash FROM users WHERE user_id = ?
+  `).bind(userId).first<{ password_hash: string }>();
+
+  if (!passwordHash?.password_hash) {
+    // User might be OIDC-only - check if they have an IdP link
+    const idpLink = await db.prepare(`
+      SELECT COUNT(*) as count FROM idp_user_links WHERE user_id = ?
+    `).bind(userId).first<{ count: number }>();
+
+    if ((idpLink?.count || 0) > 0) {
+      // OIDC user - just verify the user ID matches the session
+      if (userId !== session.user_id) {
+        return c.html(generateUiaApprovalPage(
+          sessionId,
+          session.user_id,
+          'Reset Encryption Keys',
+          'Please enter your credentials to approve this request.',
+          serverName,
+          'You must approve with the same account that started this request.'
+        ));
+      }
+    } else {
+      return c.html(generateUiaApprovalPage(
+        sessionId,
+        session.user_id,
+        'Reset Encryption Keys',
+        'Please enter your credentials to approve this request.',
+        serverName,
+        'Invalid username or password.'
+      ));
+    }
+  } else {
+    // Verify password
+    const valid = await verifyPassword(password, passwordHash.password_hash);
+    if (!valid) {
+      return c.html(generateUiaApprovalPage(
+        sessionId,
+        session.user_id,
+        'Reset Encryption Keys',
+        'Please enter your credentials to approve this request.',
+        serverName,
+        'Invalid username or password.'
+      ));
+    }
+  }
+
+  // Verify user matches session
+  if (userId !== session.user_id) {
+    return c.html(generateUiaApprovalPage(
+      sessionId,
+      session.user_id,
+      'Reset Encryption Keys',
+      'Please enter your credentials to approve this request.',
+      serverName,
+      'You must approve with the same account that started this request.'
+    ));
+  }
+
+  // Mark the OAuth stage as completed
+  session.completed_stages = session.completed_stages || [];
+  if (!session.completed_stages.includes('m.login.oauth')) {
+    session.completed_stages.push('m.login.oauth');
+  }
+  session.oauth_completed_at = Date.now();
+
+  // Save updated session
+  await c.env.CACHE.put(`uia_session:${sessionId}`, JSON.stringify(session), { expirationTtl: 300 });
+
+  console.log('[oauth/uia] OAuth UIA completed for session:', sessionId, 'user:', userId);
+
+  // Show success page
+  return c.html(generateUiaSuccessPage(sessionId, serverName));
+});
+
+// Generate UIA approval page
+function generateUiaApprovalPage(
+  sessionId: string, 
+  userId: string, 
+  title: string, 
+  description: string, 
+  serverName: string,
+  error?: string
+): string {
+  const localpart = userId.split(':')[0].substring(1); // Extract localpart from @user:server
+  
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escapeHtml(title)} - ${escapeHtml(serverName)}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      color: #f1f5f9;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .container {
+      background: #1e293b;
+      border-radius: 16px;
+      padding: 40px;
+      max-width: 440px;
+      width: 100%;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+      border: 1px solid #334155;
+    }
+    .icon {
+      width: 64px;
+      height: 64px;
+      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 24px;
+    }
+    .icon svg { width: 32px; height: 32px; color: white; }
+    h1 { font-size: 24px; font-weight: 600; margin-bottom: 12px; text-align: center; }
+    .description { color: #94a3b8; margin-bottom: 24px; text-align: center; line-height: 1.6; }
+    .warning {
+      background: rgba(245, 158, 11, 0.1);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 24px;
+      color: #fbbf24;
+      font-size: 14px;
+    }
+    .error {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 16px;
+      color: #f87171;
+      font-size: 14px;
+    }
+    .form-group { margin-bottom: 16px; }
+    label { display: block; margin-bottom: 6px; color: #94a3b8; font-size: 14px; }
+    input {
+      width: 100%;
+      padding: 12px 16px;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      color: #f1f5f9;
+      font-size: 16px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus { border-color: #3b82f6; }
+    .buttons { display: flex; gap: 12px; margin-top: 24px; }
+    button {
+      flex: 1;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      border: none;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+      color: white;
+    }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4); }
+    .btn-secondary {
+      background: transparent;
+      border: 1px solid #475569;
+      color: #94a3b8;
+    }
+    .btn-secondary:hover { background: rgba(71, 85, 105, 0.3); }
+    .account-info {
+      background: #0f172a;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 24px;
+      font-size: 14px;
+      color: #94a3b8;
+    }
+    .account-info strong { color: #f1f5f9; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="icon">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+      </svg>
+    </div>
+    
+    <h1>${escapeHtml(title)}</h1>
+    <p class="description">${escapeHtml(description)}</p>
+    
+    <div class="warning">
+      ⚠️ This is a sensitive operation. Please verify this is what you intended.
+    </div>
+
+    <div class="account-info">
+      Approving as: <strong>${escapeHtml(userId)}</strong>
+    </div>
+    
+    ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
+    
+    <form method="POST" action="/oauth/authorize/uia">
+      <input type="hidden" name="session" value="${escapeHtml(sessionId)}">
+      
+      <div class="form-group">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" placeholder="Enter your username" value="${escapeHtml(localpart)}" required autocomplete="username">
+      </div>
+      
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" placeholder="Enter your password" required autocomplete="current-password" autofocus>
+      </div>
+      
+      <div class="buttons">
+        <button type="submit" name="action" value="cancel" class="btn-secondary">Cancel</button>
+        <button type="submit" name="action" value="approve" class="btn-primary">Approve</button>
+      </div>
+    </form>
+  </div>
+</body>
+</html>`;
+}
+
+// Generate UIA success page
+function generateUiaSuccessPage(sessionId: string, serverName: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Approved - ${escapeHtml(serverName)}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      color: #f1f5f9;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .container {
+      background: #1e293b;
+      border-radius: 16px;
+      padding: 40px;
+      max-width: 440px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+      border: 1px solid #334155;
+    }
+    .icon {
+      width: 80px;
+      height: 80px;
+      background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 24px;
+    }
+    .icon svg { width: 40px; height: 40px; color: white; }
+    h1 { font-size: 24px; font-weight: 600; margin-bottom: 12px; color: #22c55e; }
+    p { color: #94a3b8; margin-bottom: 24px; }
+    .session { font-family: monospace; background: #0f172a; padding: 8px 16px; border-radius: 8px; font-size: 12px; color: #64748b; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="icon">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+      </svg>
+    </div>
+    <h1>Request Approved</h1>
+    <p>You can now return to your Matrix client. The operation will complete automatically.</p>
+    <p class="session">Session: ${escapeHtml(sessionId)}</p>
+    <script>
+      // Try to notify the parent window/opener if this was opened as a popup
+      if (window.opener) {
+        window.opener.postMessage({ type: 'uia_complete', session: '${escapeHtml(sessionId)}' }, '*');
+        setTimeout(() => window.close(), 2000);
+      }
+    </script>
+  </div>
+</body>
+</html>`;
+}
+
+// Generate UIA cancelled page
+function generateUiaCancelledPage(serverName: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cancelled - ${escapeHtml(serverName)}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      color: #f1f5f9;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .container {
+      background: #1e293b;
+      border-radius: 16px;
+      padding: 40px;
+      max-width: 440px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+      border: 1px solid #334155;
+    }
+    h1 { font-size: 24px; font-weight: 600; margin-bottom: 12px; color: #94a3b8; }
+    p { color: #64748b; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Request Cancelled</h1>
+    <p>You can close this window and return to your Matrix client.</p>
+    <script>
+      if (window.opener) {
+        window.opener.postMessage({ type: 'uia_cancelled' }, '*');
+        setTimeout(() => window.close(), 1000);
+      }
+    </script>
+  </div>
+</body>
+</html>`;
+}
+
+// Generate UIA error page
+function generateUiaErrorPage(title: string, message: string, serverName: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escapeHtml(title)} - ${escapeHtml(serverName)}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      color: #f1f5f9;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .container {
+      background: #1e293b;
+      border-radius: 16px;
+      padding: 40px;
+      max-width: 440px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+      border: 1px solid #334155;
+    }
+    h1 { font-size: 24px; font-weight: 600; margin-bottom: 12px; color: #ef4444; }
+    p { color: #94a3b8; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>${escapeHtml(title)}</h1>
+    <p>${escapeHtml(message)}</p>
+  </div>
+</body>
+</html>`;
+}
+
 export default app;
