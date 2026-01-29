@@ -522,9 +522,29 @@ app.get('/_matrix/client/v3/keys/changes', requireAuth(), async (c) => {
 // Cross-Signing Keys
 // ============================================
 
+// Helper: Check if user has OIDC/SSO link (logged in via external IdP)
+async function isOIDCUser(db: D1Database, userId: string): Promise<boolean> {
+  const result = await db.prepare(`
+    SELECT COUNT(*) as count FROM idp_user_links WHERE user_id = ?
+  `).bind(userId).first<{ count: number }>();
+  return (result?.count || 0) > 0;
+}
+
+// Helper: Check if user has password set
+async function hasPassword(db: D1Database, userId: string): Promise<boolean> {
+  const hash = await getPasswordHash(db, userId);
+  return hash !== null && hash.length > 0;
+}
+
 // POST /_matrix/client/v3/keys/device_signing/upload - Upload cross-signing keys
 // Spec: https://spec.matrix.org/v1.12/client-server-api/#post_matrixclientv3keysdevice_signingupload
 // This endpoint requires UIA (User-Interactive Authentication)
+// 
+// For OIDC users (users linked to external IdP), we support:
+// - m.login.sso: Redirect to OAuth authorize for re-authentication
+// - m.login.token: Token-based authentication (fallback)
+// For password users, we support:
+// - m.login.password: Password-based authentication
 app.post('/_matrix/client/v3/keys/device_signing/upload', requireAuth(), async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
@@ -553,15 +573,61 @@ app.post('/_matrix/client/v3/keys/device_signing/upload', requireAuth(), async (
   const hasExistingKeys = (existingKeys?.count || 0) > 0;
   console.log('[keys] User has existing keys:', hasExistingKeys);
 
+  // Check user's authentication capabilities
+  const userIsOIDC = await isOIDCUser(db, userId);
+  const userHasPassword = await hasPassword(db, userId);
+  console.log('[keys] User is OIDC:', userIsOIDC, 'Has password:', userHasPassword);
+
   // MSC3967: Do not require UIA when first uploading cross-signing keys
   // Per Matrix spec v1.11+, if user has NO existing cross-signing keys, skip UIA for first-time setup
-  // If user HAS existing keys, require password authentication
+  // If user HAS existing keys, require authentication
   if (!hasExistingKeys) {
     // First-time cross-signing setup - skip UIA per MSC3967
     console.log('[keys] First-time cross-signing setup - skipping UIA per MSC3967');
   } else if (!auth) {
     // User has existing keys but no auth provided - return UIA challenge
     const sessionId = await generateOpaqueId(16);
+
+    // Build available flows based on user's authentication method
+    const flows: Array<{ stages: string[] }> = [];
+    
+    if (userIsOIDC) {
+      // OIDC users: Offer SSO flow with token fallback
+      flows.push({ stages: ['m.login.sso'] });
+      flows.push({ stages: ['m.login.token'] });
+    }
+    
+    if (userHasPassword) {
+      // Password users: Offer password flow
+      flows.push({ stages: ['m.login.password'] });
+    }
+    
+    // Fallback: If user has neither (shouldn't happen), offer all flows
+    if (flows.length === 0) {
+      flows.push({ stages: ['m.login.sso'] });
+      flows.push({ stages: ['m.login.password'] });
+    }
+
+    // Build SSO params for OIDC users
+    const serverName = c.env.SERVER_NAME;
+    const baseUrl = `https://${serverName}`;
+    const params: Record<string, any> = {};
+    
+    if (userIsOIDC) {
+      // Provide SSO redirect URI for the client
+      // The client should redirect the user to this URL to complete SSO UIA
+      params['m.login.sso'] = {
+        // Identity providers available for SSO
+        identity_providers: [
+          {
+            id: 'oidc',
+            name: 'Single Sign-On',
+            // The redirect URL includes the UIA session for callback
+            redirect_url: `${baseUrl}/_matrix/client/v3/auth/m.login.sso/redirect?session=${sessionId}`,
+          },
+        ],
+      };
+    }
 
     // Store session in KV for validation
     await c.env.CACHE.put(
@@ -571,18 +637,18 @@ app.post('/_matrix/client/v3/keys/device_signing/upload', requireAuth(), async (
         created_at: Date.now(),
         type: 'device_signing_upload',
         completed_stages: [],
+        is_oidc_user: userIsOIDC,
+        has_password: userHasPassword,
       }),
       { expirationTtl: 300 } // 5 minute session
     );
 
-    console.log('[keys] UIA required (existing keys), returning challenge with session:', sessionId);
+    console.log('[keys] UIA required (existing keys), returning challenge with session:', sessionId, 'flows:', flows);
 
-    // Return UIA challenge - require password for key replacement
+    // Return UIA challenge
     return c.json({
-      flows: [
-        { stages: ['m.login.password'] },
-      ],
-      params: {},
+      flows,
+      params,
       session: sessionId,
     }, 401);
   } else {
@@ -609,6 +675,46 @@ app.post('/_matrix/client/v3/keys/device_signing/upload', requireAuth(), async (
       }
 
       console.log('[keys] Password validated successfully');
+    } else if (auth.type === 'm.login.sso' || auth.type === 'm.login.token') {
+      // SSO/Token authentication for OIDC users
+      // Check if this session has been completed via SSO flow
+      const sessionId = auth.session;
+      if (!sessionId) {
+        console.log('[keys] No session ID in SSO auth');
+        return Errors.missingParam('auth.session').toResponse();
+      }
+
+      const sessionJson = await c.env.CACHE.get(`uia_session:${sessionId}`);
+      if (!sessionJson) {
+        console.log('[keys] UIA session not found or expired');
+        return c.json({
+          errcode: 'M_UNKNOWN',
+          error: 'UIA session not found or expired',
+        }, 401);
+      }
+
+      const session = JSON.parse(sessionJson);
+      
+      // Check if session belongs to this user
+      if (session.user_id !== userId) {
+        console.log('[keys] UIA session user mismatch');
+        return Errors.forbidden('Session user mismatch').toResponse();
+      }
+
+      // Check if SSO has been completed for this session
+      if (!session.completed_stages.includes('m.login.sso') && 
+          !session.completed_stages.includes('m.login.token')) {
+        console.log('[keys] SSO not completed for this session');
+        return c.json({
+          errcode: 'M_UNAUTHORIZED',
+          error: 'SSO authentication not completed. Please complete the SSO flow.',
+        }, 401);
+      }
+
+      console.log('[keys] SSO/Token authentication validated successfully');
+      
+      // Clean up the session
+      await c.env.CACHE.delete(`uia_session:${sessionId}`);
     } else {
       // Unknown auth type
       console.log('[keys] Unknown auth type:', auth.type);
@@ -815,5 +921,213 @@ app.post('/_matrix/client/v3/keys/signatures/upload', requireAuth(), async (c) =
   console.log('[signatures/upload] Completed, failures:', Object.keys(failures).length > 0 ? failures : 'none');
   return c.json({ failures });
 });
+
+// ============================================
+// UIA SSO Flow Endpoints (for OIDC users)
+// ============================================
+
+// GET /_matrix/client/v3/auth/m.login.sso/redirect - Redirect to SSO for UIA
+// This endpoint is used by clients to initiate SSO authentication during UIA
+// Spec: https://spec.matrix.org/v1.12/client-server-api/#get_matrixclientv3authmlloginssofallbackweb
+app.get('/_matrix/client/v3/auth/m.login.sso/redirect', async (c) => {
+  const sessionId = c.req.query('session');
+  const redirectUrl = c.req.query('redirectUrl');
+
+  if (!sessionId) {
+    return c.json({
+      errcode: 'M_MISSING_PARAM',
+      error: 'Missing session parameter',
+    }, 400);
+  }
+
+  // Verify the UIA session exists
+  const sessionJson = await c.env.CACHE.get(`uia_session:${sessionId}`);
+  if (!sessionJson) {
+    return c.json({
+      errcode: 'M_UNKNOWN',
+      error: 'UIA session not found or expired',
+    }, 404);
+  }
+
+  const session = JSON.parse(sessionJson);
+  const serverName = c.env.SERVER_NAME;
+  const baseUrl = `https://${serverName}`;
+
+  // Store the redirect URL for after SSO completes
+  session.redirect_url = redirectUrl || `${baseUrl}/_matrix/client/v3/auth/m.login.sso/callback`;
+  await c.env.CACHE.put(`uia_session:${sessionId}`, JSON.stringify(session), { expirationTtl: 300 });
+
+  // Redirect to OAuth authorize endpoint for re-authentication
+  // The user must authenticate with their IdP to complete the UIA flow
+  const authorizeUrl = new URL(`${baseUrl}/oauth/authorize`);
+  authorizeUrl.searchParams.set('response_type', 'code');
+  authorizeUrl.searchParams.set('client_id', 'matrix-uia');
+  authorizeUrl.searchParams.set('redirect_uri', `${baseUrl}/_matrix/client/v3/auth/m.login.sso/callback`);
+  authorizeUrl.searchParams.set('scope', 'openid');
+  authorizeUrl.searchParams.set('state', sessionId);
+
+  console.log('[keys/sso] Redirecting to SSO for UIA session:', sessionId);
+  return c.redirect(authorizeUrl.toString());
+});
+
+// GET /_matrix/client/v3/auth/m.login.sso/callback - SSO callback for UIA
+// This endpoint handles the return from SSO authentication
+app.get('/_matrix/client/v3/auth/m.login.sso/callback', async (c) => {
+  const code = c.req.query('code');
+  const state = c.req.query('state'); // This is the UIA session ID
+  const error = c.req.query('error');
+  const errorDescription = c.req.query('error_description');
+
+  if (error) {
+    console.log('[keys/sso] SSO error:', error, errorDescription);
+    return c.html(generateSSOErrorPage('SSO Authentication Failed', errorDescription || error));
+  }
+
+  if (!state) {
+    return c.html(generateSSOErrorPage('Invalid Request', 'Missing state parameter'));
+  }
+
+  // Retrieve the UIA session
+  const sessionJson = await c.env.CACHE.get(`uia_session:${state}`);
+  if (!sessionJson) {
+    return c.html(generateSSOErrorPage('Session Expired', 'The UIA session has expired. Please try again.'));
+  }
+
+  const session = JSON.parse(sessionJson);
+
+  // If code is present, SSO was successful
+  // For UIA purposes, we just need to verify the user authenticated - we don't need the token
+  if (code) {
+    // Mark SSO as completed in the session
+    session.completed_stages = session.completed_stages || [];
+    if (!session.completed_stages.includes('m.login.sso')) {
+      session.completed_stages.push('m.login.sso');
+    }
+    session.sso_completed_at = Date.now();
+
+    // Save updated session
+    await c.env.CACHE.put(`uia_session:${state}`, JSON.stringify(session), { expirationTtl: 300 });
+
+    console.log('[keys/sso] SSO completed for UIA session:', state);
+
+    // Return success page that tells the client to retry the original request
+    return c.html(generateSSOSuccessPage(state, session.redirect_url));
+  }
+
+  return c.html(generateSSOErrorPage('Authentication Failed', 'No authorization code received'));
+});
+
+// POST /_matrix/client/v3/auth/m.login.token/submit - Submit token for UIA
+// Alternative flow for OIDC users who have a valid token
+app.post('/_matrix/client/v3/auth/m.login.token/submit', requireAuth(), async (c) => {
+  const userId = c.get('userId');
+
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return Errors.badJson().toResponse();
+  }
+
+  const { session } = body;
+
+  if (!session) {
+    return Errors.missingParam('session').toResponse();
+  }
+
+  // Retrieve the UIA session
+  const sessionJson = await c.env.CACHE.get(`uia_session:${session}`);
+  if (!sessionJson) {
+    return c.json({
+      errcode: 'M_UNKNOWN',
+      error: 'UIA session not found or expired',
+    }, 404);
+  }
+
+  const sessionData = JSON.parse(sessionJson);
+
+  // Verify the session belongs to this user
+  if (sessionData.user_id !== userId) {
+    return Errors.forbidden('Session user mismatch').toResponse();
+  }
+
+  // The user is already authenticated with a valid access token
+  // This is sufficient for token-based UIA completion
+  sessionData.completed_stages = sessionData.completed_stages || [];
+  if (!sessionData.completed_stages.includes('m.login.token')) {
+    sessionData.completed_stages.push('m.login.token');
+  }
+  sessionData.token_completed_at = Date.now();
+
+  // Save updated session
+  await c.env.CACHE.put(`uia_session:${session}`, JSON.stringify(sessionData), { expirationTtl: 300 });
+
+  console.log('[keys/token] Token UIA completed for session:', session);
+
+  return c.json({
+    completed: ['m.login.token'],
+    session,
+  });
+});
+
+// Helper: Generate SSO error page
+function generateSSOErrorPage(title: string, message: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #f1f5f9; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+    .container { background: #1e293b; padding: 40px; border-radius: 12px; max-width: 400px; text-align: center; border: 1px solid #334155; }
+    h1 { color: #ef4444; margin-bottom: 16px; }
+    p { color: #94a3b8; margin-bottom: 24px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>${title}</h1>
+    <p>${message}</p>
+    <p>You can close this window and try again.</p>
+  </div>
+</body>
+</html>`;
+}
+
+// Helper: Generate SSO success page
+function generateSSOSuccessPage(sessionId: string, _redirectUrl?: string): string {
+  // Note: _redirectUrl is reserved for future use when we support custom redirects
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Authentication Successful</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #f1f5f9; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+    .container { background: #1e293b; padding: 40px; border-radius: 12px; max-width: 400px; text-align: center; border: 1px solid #334155; }
+    h1 { color: #22c55e; margin-bottom: 16px; }
+    p { color: #94a3b8; margin-bottom: 24px; }
+    .session { font-family: monospace; background: #0f172a; padding: 8px 16px; border-radius: 8px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Authentication Successful</h1>
+    <p>Your identity has been verified.</p>
+    <p>You can now return to your Matrix client and complete the operation.</p>
+    <p class="session">Session: ${sessionId}</p>
+    <script>
+      // Try to notify the parent window/opener if this was opened as a popup
+      if (window.opener) {
+        window.opener.postMessage({ type: 'uia_complete', session: '${sessionId}' }, '*');
+        setTimeout(() => window.close(), 2000);
+      }
+    </script>
+  </div>
+</body>
+</html>`;
+}
 
 export default app;

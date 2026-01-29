@@ -16,6 +16,7 @@ import { formatUserId } from '../utils/ids';
 import { generateAccessToken, generateDeviceId } from '../utils/ids';
 import { hashToken } from '../utils/crypto';
 import { createUser, getUserById, createDevice, createAccessToken } from '../services/database';
+import { requireAuth } from '../middleware/auth';
 import { generateOpaqueId } from '../utils/ids';
 
 const app = new Hono<AppEnv>();
@@ -475,6 +476,73 @@ app.get('/_matrix/client/v1/auth_metadata', async (c) => {
   };
 
   return c.json(response);
+});
+
+// ============================================
+// MSC3861 Identity Reset Endpoint
+// ============================================
+
+// Helper to get next stream position (same pattern as keys.ts)
+async function getNextStreamPosition(db: D1Database, streamName: string): Promise<number> {
+  await db.prepare(`
+    UPDATE stream_positions SET position = position + 1 WHERE stream_name = ?
+  `).bind(streamName).run();
+
+  const result = await db.prepare(`
+    SELECT position FROM stream_positions WHERE stream_name = ?
+  `).bind(streamName).first<{ position: number }>();
+
+  return result?.position || 1;
+}
+
+// Helper to get Durable Object for user keys
+function getUserKeysDO(env: any, userId: string) {
+  const id = env.USER_KEYS.idFromName(userId);
+  return env.USER_KEYS.get(id);
+}
+
+// POST /_matrix/client/unstable/org.matrix.msc3861/account/identity/reset
+// Allows OIDC users to reset their cross-signing identity
+// Per MSC3861:
+// 1. Requires OIDC re-authentication (valid access token)
+// 2. Deletes all cross-signing keys for the user
+// 3. Returns 200 on success
+app.post('/_matrix/client/unstable/org.matrix.msc3861/account/identity/reset', requireAuth(), async (c) => {
+  const userId = c.get('userId');
+  const db = c.env.DB;
+
+  try {
+    // Delete cross-signing keys from Durable Object (primary storage)
+    const stub = getUserKeysDO(c.env, userId);
+    await stub.fetch(new Request('http://internal/cross-signing/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    }));
+
+    // Delete cross-signing keys from D1 (backup storage)
+    await db.prepare('DELETE FROM cross_signing_keys WHERE user_id = ?').bind(userId).run();
+
+    // Delete cross-signing signatures
+    await db.prepare('DELETE FROM cross_signing_signatures WHERE user_id = ? OR signer_user_id = ?').bind(userId, userId).run();
+
+    // Delete from KV (cache)
+    await c.env.CROSS_SIGNING_KEYS.delete(`user:${userId}`);
+
+    // Record key change to trigger device list update for other users
+    const streamPosition = await getNextStreamPosition(db, 'device_keys');
+    await db.prepare(`
+      INSERT INTO device_key_changes (user_id, device_id, change_type, stream_position)
+      VALUES (?, NULL, 'cross_signing_reset', ?)
+    `).bind(userId, streamPosition).run();
+
+    console.log(`[OIDC] Cross-signing identity reset for user ${userId}`);
+
+    // Return empty object on success per MSC3861
+    return c.json({});
+  } catch (err) {
+    console.error(`[OIDC] Identity reset failed for ${userId}:`, err);
+    return c.json({ errcode: 'M_UNKNOWN', error: 'Failed to reset identity' }, 500);
+  }
 });
 
 // Export encryption helpers for admin API

@@ -624,10 +624,8 @@ app.delete('/admin/api/users/:userId/purge', requireAuth(), requireAdmin, async 
     await c.env.DEVICE_KEYS.delete(`device:${userId}:${device.device_id}`);
   }
 
-  // Clean up any other KV data
-  await c.env.CROSS_SIGNING_KEYS.delete(`master:${userId}`);
-  await c.env.CROSS_SIGNING_KEYS.delete(`self_signing:${userId}`);
-  await c.env.CROSS_SIGNING_KEYS.delete(`user_signing:${userId}`);
+  // Clean up cross-signing keys from KV (stored as user:{userId} in keys.ts)
+  await c.env.CROSS_SIGNING_KEYS.delete(`user:${userId}`);
 
   // Invalidate stats cache
   await invalidateStatsCache(c.env);
@@ -726,9 +724,8 @@ app.post('/admin/api/users/bulk-delete', requireAuth(), requireAdmin, async (c) 
     for (const device of devices.results) {
       await c.env.DEVICE_KEYS.delete(`device:${userId}:${device.device_id}`);
     }
-    await c.env.CROSS_SIGNING_KEYS.delete(`master:${userId}`);
-    await c.env.CROSS_SIGNING_KEYS.delete(`self_signing:${userId}`);
-    await c.env.CROSS_SIGNING_KEYS.delete(`user_signing:${userId}`);
+    // Cross-signing keys stored as user:{userId} in keys.ts
+    await c.env.CROSS_SIGNING_KEYS.delete(`user:${userId}`);
     
     deleted++;
   }
@@ -792,10 +789,8 @@ app.post('/admin/api/cleanup', requireAuth(), requireAdmin, async (c) => {
     // Finally delete the user
     await db.prepare('DELETE FROM users WHERE user_id = ?').bind(userId).run();
 
-    // Clean up KV cross-signing keys
-    await c.env.CROSS_SIGNING_KEYS.delete(`master:${userId}`);
-    await c.env.CROSS_SIGNING_KEYS.delete(`self_signing:${userId}`);
-    await c.env.CROSS_SIGNING_KEYS.delete(`user_signing:${userId}`);
+    // Clean up KV cross-signing keys (stored as user:{userId} in keys.ts)
+    await c.env.CROSS_SIGNING_KEYS.delete(`user:${userId}`);
   }
 
   // Clean up device keys from KV

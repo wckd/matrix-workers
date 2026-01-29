@@ -66,6 +66,10 @@ export class UserKeysDurableObject extends DurableObject<Env> {
         return this.putCrossSigningKeys(body);
       }
 
+      if (path === '/cross-signing/delete' && request.method === 'POST') {
+        return this.deleteCrossSigningKeys();
+      }
+
       if (path === '/signatures/get' && request.method === 'GET') {
         const targetKeyId = url.searchParams.get('target_key_id');
         return this.getSignatures(targetKeyId);
@@ -201,6 +205,15 @@ export class UserKeysDurableObject extends DurableObject<Env> {
 
     console.log('[UserKeysDO] Stored cross-signing keys:', Object.keys(merged));
     return new Response(JSON.stringify({ success: true }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  // Delete cross-signing keys - for identity reset
+  private async deleteCrossSigningKeys(): Promise<Response> {
+    await this.ctx.storage.delete('cross_signing_keys');
+    console.log('[UserKeysDO] Deleted all cross-signing keys');
+    return new Response(JSON.stringify({ success: true, deleted: true }), {
       headers: { 'Content-Type': 'application/json' },
     });
   }
