@@ -419,8 +419,25 @@ app.post('/oauth/token', async (c) => {
     // Generate tokens
     const accessToken = await generateAccessToken();
     const newRefreshToken = generateRandomString(32);
-    const deviceId = await generateDeviceId();
     const tokenId = await generateOpaqueId(16);
+    
+    // Extract device ID from scope per MSC2967
+    // Scope format: urn:matrix:org.matrix.msc2967.client:device:DEVICE_ID
+    let deviceId: string | undefined;
+    const scopes = authCode.scope?.split(' ') || [];
+    for (const scope of scopes) {
+      if (scope.startsWith('urn:matrix:org.matrix.msc2967.client:device:')) {
+        deviceId = scope.replace('urn:matrix:org.matrix.msc2967.client:device:', '');
+        break;
+      }
+    }
+    
+    // If no device ID in scope, generate one (fallback)
+    if (!deviceId || deviceId === '*') {
+      deviceId = await generateDeviceId();
+    }
+    
+    console.log('[oauth/token] Device ID from scope:', deviceId, 'scopes:', scopes);
 
     // Create device and access token in database
     await createDevice(c.env.DB, authCode.user_id, deviceId, `OAuth Client (${client.client_name})`);

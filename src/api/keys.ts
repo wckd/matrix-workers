@@ -146,10 +146,20 @@ app.post('/_matrix/client/v3/keys/upload', requireAuth(), async (c) => {
   // Store device keys with strong consistency
   if (device_keys) {
     // Validate device_keys structure
+    console.log('[keys/upload] Validating device_keys:', {
+      authUserId: userId,
+      authDeviceId: deviceId,
+      bodyUserId: device_keys.user_id,
+      bodyDeviceId: device_keys.device_id,
+      userMatch: device_keys.user_id === userId,
+      deviceMatch: device_keys.device_id === deviceId,
+    });
+    
     if (device_keys.user_id !== userId || device_keys.device_id !== deviceId) {
+      console.log('[keys/upload] MISMATCH - returning 400');
       return c.json({
         errcode: 'M_INVALID_PARAM',
-        error: 'device_keys.user_id and device_keys.device_id must match authenticated user',
+        error: `device_keys.user_id and device_keys.device_id must match authenticated user. Got user_id=${device_keys.user_id} (expected ${userId}), device_id=${device_keys.device_id} (expected ${deviceId})`,
       }, 400);
     }
 
