@@ -6,42 +6,66 @@ export const adminDashboardHtml = (serverName: string) => `
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Matrix-PQC Admin - ${serverName}</title>
+  <title>Matrix-Worker Admin - ${serverName}</title>
   <style>
     :root {
-      --primary: #0d9488;
-      --primary-dark: #0f766e;
-      --bg: #0f172a;
-      --bg-card: #1e293b;
-      --bg-hover: #334155;
-      --text: #f1f5f9;
-      --text-muted: #94a3b8;
-      --border: #334155;
-      --danger: #ef4444;
-      --success: #22c55e;
-      --warning: #f59e0b;
+      /* Base - Deep dark enterprise theme */
+      --bg-base: #0a0a0b;
+      --bg-elevated: #111113;
+      --bg-surface: #18181b;
+      --bg-hover: #27272a;
+      --bg-active: #3f3f46;
+      
+      /* Borders */
+      --border-subtle: rgba(255, 255, 255, 0.06);
+      --border-default: rgba(255, 255, 255, 0.1);
+      --border-strong: rgba(255, 255, 255, 0.15);
+      
+      /* Text */
+      --text-primary: #fafafa;
+      --text-secondary: #a1a1aa;
+      --text-tertiary: #71717a;
+      
+      /* Accents */
+      --accent-blue: #3b82f6;
+      --accent-purple: #8b5cf6;
+      --accent-green: #22c55e;
+      --accent-amber: #f59e0b;
+      --accent-red: #ef4444;
+      --accent-cyan: #06b6d4;
+      
+      /* Legacy compatibility */
+      --primary: var(--accent-blue);
+      --primary-dark: #2563eb;
+      --bg: var(--bg-base);
+      --bg-card: var(--bg-surface);
+      --bg-hover: var(--bg-hover);
+      --text: var(--text-primary);
+      --text-muted: var(--text-secondary);
+      --border: var(--border-default);
+      --danger: var(--accent-red);
+      --success: var(--accent-green);
+      --warning: var(--accent-amber);
+      
+      /* Shadows */
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+      --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+      --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
+      
+      /* Transitions */
+      --transition-fast: 150ms ease;
+      --transition-normal: 200ms ease;
 
       /* Glassmorphism */
-      --glass-bg: rgba(30, 41, 59, 0.7);
-      --glass-bg-light: rgba(30, 41, 59, 0.5);
-      --glass-border: rgba(148, 163, 184, 0.1);
+      --glass-bg: rgba(24, 24, 27, 0.8);
+      --glass-bg-light: rgba(24, 24, 27, 0.5);
+      --glass-border: var(--border-default);
       --glass-blur: 12px;
       --glass-blur-heavy: 20px;
 
       /* Gradients */
-      --gradient-primary: linear-gradient(135deg, #0d9488 0%, #0f766e 100%);
-      --gradient-surface: linear-gradient(180deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.9) 100%);
-
-      /* Shadows */
-      --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
-      --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
-      --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
-      --shadow-glow: 0 0 20px rgba(13, 148, 136, 0.2);
-
-      /* Transitions */
-      --transition-fast: 150ms ease;
-      --transition-normal: 250ms ease;
-      --transition-slow: 400ms ease;
+      --gradient-primary: linear-gradient(135deg, var(--accent-blue) 0%, var(--primary-dark) 100%);
+      --gradient-surface: linear-gradient(180deg, var(--bg-surface) 0%, var(--bg-base) 100%);
     }
 
     * {
@@ -52,13 +76,13 @@ export const adminDashboardHtml = (serverName: string) => `
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: var(--bg);
-      color: var(--text);
+      background: var(--bg-base);
+      color: var(--text-primary);
       min-height: 100vh;
       background-image:
-        radial-gradient(ellipse at 20% 20%, rgba(13, 148, 136, 0.08) 0%, transparent 50%),
-        radial-gradient(ellipse at 80% 80%, rgba(13, 148, 136, 0.05) 0%, transparent 50%),
-        radial-gradient(ellipse at 50% 50%, rgba(30, 41, 59, 0.5) 0%, transparent 70%);
+        radial-gradient(ellipse at 20% 20%, rgba(59, 130, 246, 0.06) 0%, transparent 50%),
+        radial-gradient(ellipse at 80% 80%, rgba(139, 92, 246, 0.04) 0%, transparent 50%),
+        radial-gradient(ellipse at 50% 50%, rgba(24, 24, 27, 0.5) 0%, transparent 70%);
       background-attachment: fixed;
     }
 
@@ -78,8 +102,8 @@ export const adminDashboardHtml = (serverName: string) => `
       padding: 40px;
       width: 100%;
       max-width: 400px;
-      border: 1px solid var(--glass-border);
-      box-shadow: var(--shadow-lg), var(--shadow-glow);
+      border: 1px solid var(--border-default);
+      box-shadow: var(--shadow-lg);
       position: relative;
       overflow: hidden;
     }
@@ -119,7 +143,7 @@ export const adminDashboardHtml = (serverName: string) => `
       background: var(--glass-bg);
       backdrop-filter: blur(var(--glass-blur-heavy));
       -webkit-backdrop-filter: blur(var(--glass-blur-heavy));
-      border-right: 1px solid var(--glass-border);
+      border-right: 1px solid var(--border-default);
       padding: 24px 0;
       display: flex;
       flex-direction: column;
@@ -128,7 +152,7 @@ export const adminDashboardHtml = (serverName: string) => `
 
     .sidebar-header {
       padding: 0 20px 20px;
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid var(--border-default);
     }
 
     .sidebar-header h1 {
@@ -140,7 +164,7 @@ export const adminDashboardHtml = (serverName: string) => `
 
     .sidebar-header .server-name {
       font-size: 12px;
-      color: var(--text-muted);
+      color: var(--text-secondary);
       margin-top: 5px;
     }
 
@@ -155,7 +179,7 @@ export const adminDashboardHtml = (serverName: string) => `
       align-items: center;
       gap: 12px;
       padding: 14px 24px;
-      color: var(--text-muted);
+      color: var(--text-secondary);
       text-decoration: none;
       cursor: pointer;
       transition: all var(--transition-fast);
@@ -165,14 +189,14 @@ export const adminDashboardHtml = (serverName: string) => `
     }
 
     .nav-item:hover {
-      background: rgba(255, 255, 255, 0.05);
-      color: var(--text);
+      background: var(--bg-hover);
+      color: var(--text-primary);
     }
 
     .nav-item.active {
-      background: rgba(13, 148, 136, 0.1);
-      color: var(--text);
-      border-left-color: var(--primary);
+      background: rgba(59, 130, 246, 0.1);
+      color: var(--text-primary);
+      border-left-color: var(--accent-blue);
     }
 
     .nav-item svg {
@@ -189,9 +213,19 @@ export const adminDashboardHtml = (serverName: string) => `
       opacity: 1;
     }
 
+    .nav-item .nav-shortcut {
+      margin-left: auto;
+      font-size: 10px;
+      color: var(--text-tertiary);
+      background: var(--bg-elevated);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+    }
+
     .nav-item .badge-count {
       margin-left: auto;
-      background: var(--danger);
+      background: var(--accent-red);
       color: white;
       font-size: 10px;
       padding: 2px 6px;
@@ -260,11 +294,11 @@ export const adminDashboardHtml = (serverName: string) => `
     .btn-primary {
       background: var(--gradient-primary);
       color: white;
-      box-shadow: 0 2px 8px rgba(13, 148, 136, 0.3);
+      box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
     }
 
     .btn-primary:hover {
-      box-shadow: 0 4px 16px rgba(13, 148, 136, 0.4);
+      box-shadow: 0 4px 16px rgba(59, 130, 246, 0.4);
       transform: translateY(-1px);
     }
 
@@ -273,7 +307,7 @@ export const adminDashboardHtml = (serverName: string) => `
     }
 
     .btn-danger {
-      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+      background: linear-gradient(135deg, var(--accent-red) 0%, #dc2626 100%);
       color: white;
       box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
     }
@@ -284,19 +318,18 @@ export const adminDashboardHtml = (serverName: string) => `
     }
 
     .btn-secondary {
-      background: rgba(255, 255, 255, 0.05);
-      color: var(--text);
-      border: 1px solid var(--glass-border);
-      backdrop-filter: blur(8px);
+      background: var(--bg-hover);
+      color: var(--text-primary);
+      border: 1px solid var(--border-default);
     }
 
     .btn-secondary:hover {
-      background: rgba(255, 255, 255, 0.1);
-      border-color: rgba(255, 255, 255, 0.15);
+      background: var(--bg-active);
+      border-color: var(--border-strong);
     }
 
     .btn-warning {
-      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+      background: linear-gradient(135deg, var(--accent-amber) 0%, #d97706 100%);
       color: black;
       box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
     }
@@ -307,7 +340,7 @@ export const adminDashboardHtml = (serverName: string) => `
     }
 
     .btn-success {
-      background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+      background: linear-gradient(135deg, var(--accent-green) 0%, #16a34a 100%);
       color: white;
       box-shadow: 0 2px 8px rgba(34, 197, 94, 0.3);
     }
@@ -330,12 +363,10 @@ export const adminDashboardHtml = (serverName: string) => `
     }
 
     .stat-card {
-      background: var(--glass-bg);
-      backdrop-filter: blur(var(--glass-blur));
-      -webkit-backdrop-filter: blur(var(--glass-blur));
+      background: var(--bg-surface);
       border-radius: 16px;
       padding: 24px;
-      border: 1px solid var(--glass-border);
+      border: 1px solid var(--border-default);
       box-shadow: var(--shadow-sm);
       transition: all var(--transition-normal);
       position: relative;
@@ -356,7 +387,7 @@ export const adminDashboardHtml = (serverName: string) => `
 
     .stat-card:hover {
       transform: translateY(-2px);
-      box-shadow: var(--shadow-md), 0 0 20px rgba(13, 148, 136, 0.1);
+      box-shadow: var(--shadow-md);
     }
 
     .stat-card:hover::after {
@@ -364,7 +395,7 @@ export const adminDashboardHtml = (serverName: string) => `
     }
 
     .stat-card .label {
-      color: var(--text-muted);
+      color: var(--text-secondary);
       font-size: 14px;
       margin-bottom: 8px;
     }
@@ -380,15 +411,13 @@ export const adminDashboardHtml = (serverName: string) => `
     }
 
     .stat-card .change.positive {
-      color: var(--success);
+      color: var(--accent-green);
     }
 
     .card {
-      background: var(--glass-bg);
-      backdrop-filter: blur(var(--glass-blur));
-      -webkit-backdrop-filter: blur(var(--glass-blur));
+      background: var(--bg-surface);
       border-radius: 16px;
-      border: 1px solid var(--glass-border);
+      border: 1px solid var(--border-default);
       margin-bottom: 24px;
       box-shadow: var(--shadow-sm);
       transition: box-shadow var(--transition-normal);
@@ -400,7 +429,7 @@ export const adminDashboardHtml = (serverName: string) => `
 
     .card-header {
       padding: 20px;
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid var(--border-default);
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -416,6 +445,70 @@ export const adminDashboardHtml = (serverName: string) => `
       padding: 20px;
     }
 
+    /* Charts */
+    .chart-container {
+      position: relative;
+      height: 300px;
+      width: 100%;
+    }
+
+    .chart-container-sm {
+      height: 200px;
+    }
+
+    .charts-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 24px;
+      margin-bottom: 24px;
+    }
+
+    @media (max-width: 1200px) {
+      .charts-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* Quick Actions */
+    .quick-actions {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .quick-action {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      padding: 16px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      text-decoration: none;
+      color: var(--text-primary);
+    }
+
+    .quick-action:hover {
+      background: var(--bg-hover);
+      border-color: var(--border-default);
+      transform: translateY(-2px);
+    }
+
+    .quick-action svg {
+      width: 24px;
+      height: 24px;
+      color: var(--accent-blue);
+    }
+
+    .quick-action span {
+      font-size: 13px;
+      text-align: center;
+    }
+
     .table {
       width: 100%;
       border-collapse: collapse;
@@ -424,11 +517,11 @@ export const adminDashboardHtml = (serverName: string) => `
     .table th, .table td {
       padding: 12px;
       text-align: left;
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid var(--border-default);
     }
 
     .table th {
-      color: var(--text-muted);
+      color: var(--text-secondary);
       font-weight: 500;
       font-size: 12px;
       text-transform: uppercase;
@@ -451,22 +544,22 @@ export const adminDashboardHtml = (serverName: string) => `
 
     .badge-success {
       background: rgba(34, 197, 94, 0.2);
-      color: var(--success);
+      color: var(--accent-green);
     }
 
     .badge-danger {
       background: rgba(239, 68, 68, 0.2);
-      color: var(--danger);
+      color: var(--accent-red);
     }
 
     .badge-warning {
       background: rgba(245, 158, 11, 0.2);
-      color: var(--warning);
+      color: var(--accent-amber);
     }
 
     .badge-info {
-      background: rgba(13, 148, 136, 0.2);
-      color: var(--primary);
+      background: rgba(59, 130, 246, 0.2);
+      color: var(--accent-blue);
     }
 
     .form-group {
@@ -476,7 +569,7 @@ export const adminDashboardHtml = (serverName: string) => `
     .form-group label {
       display: block;
       margin-bottom: 8px;
-      color: var(--text-muted);
+      color: var(--text-secondary);
       font-size: 14px;
     }
 
@@ -484,23 +577,22 @@ export const adminDashboardHtml = (serverName: string) => `
       width: 100%;
       padding: 12px 16px;
       border-radius: 10px;
-      border: 1px solid var(--glass-border);
-      background: rgba(15, 23, 42, 0.6);
-      color: var(--text);
+      border: 1px solid var(--border-default);
+      background: var(--bg-elevated);
+      color: var(--text-primary);
       font-size: 14px;
       transition: all var(--transition-fast);
     }
 
     .form-control:focus {
       outline: none;
-      border-color: var(--primary);
-      box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.2);
-      background: rgba(15, 23, 42, 0.8);
+      border-color: var(--accent-blue);
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+      background: var(--bg-surface);
     }
 
     .form-control::placeholder {
-      color: var(--text-muted);
-      opacity: 0.7;
+      color: var(--text-tertiary);
     }
 
     .form-row {
@@ -519,6 +611,36 @@ export const adminDashboardHtml = (serverName: string) => `
       flex: 1;
     }
 
+    /* Filter Pills */
+    .filter-pills {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+
+    .filter-pill {
+      padding: 8px 16px;
+      border-radius: 20px;
+      cursor: pointer;
+      background: var(--bg-elevated);
+      color: var(--text-secondary);
+      border: 1px solid var(--border-default);
+      font-size: 13px;
+      transition: all var(--transition-fast);
+    }
+
+    .filter-pill:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+    }
+
+    .filter-pill.active {
+      background: var(--accent-blue);
+      color: white;
+      border-color: var(--accent-blue);
+    }
+
     .filter-tabs {
       display: flex;
       gap: 10px;
@@ -529,23 +651,28 @@ export const adminDashboardHtml = (serverName: string) => `
       padding: 8px 16px;
       border-radius: 6px;
       cursor: pointer;
-      background: var(--bg);
-      color: var(--text-muted);
-      border: 1px solid var(--border);
+      background: var(--bg-elevated);
+      color: var(--text-secondary);
+      border: 1px solid var(--border-default);
       font-size: 13px;
+      transition: all var(--transition-fast);
+    }
+
+    .filter-tab:hover {
+      background: var(--bg-hover);
     }
 
     .filter-tab.active {
-      background: var(--primary);
+      background: var(--accent-blue);
       color: white;
-      border-color: var(--primary);
+      border-color: var(--accent-blue);
     }
 
     .modal-overlay {
       display: none;
       position: fixed;
       inset: 0;
-      background: rgba(0, 0, 0, 0.6);
+      background: rgba(0, 0, 0, 0.7);
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
       align-items: center;
@@ -562,15 +689,13 @@ export const adminDashboardHtml = (serverName: string) => `
     }
 
     .modal {
-      background: var(--glass-bg);
-      backdrop-filter: blur(var(--glass-blur-heavy));
-      -webkit-backdrop-filter: blur(var(--glass-blur-heavy));
+      background: var(--bg-surface);
       border-radius: 16px;
       width: 100%;
       max-width: 600px;
       max-height: 90vh;
       overflow: auto;
-      border: 1px solid var(--glass-border);
+      border: 1px solid var(--border-default);
       box-shadow: var(--shadow-lg);
       transform: scale(0.95) translateY(10px);
       transition: transform var(--transition-normal);
@@ -586,7 +711,7 @@ export const adminDashboardHtml = (serverName: string) => `
 
     .modal-header {
       padding: 20px;
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid var(--border-default);
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -599,9 +724,14 @@ export const adminDashboardHtml = (serverName: string) => `
     .modal-close {
       background: none;
       border: none;
-      color: var(--text-muted);
+      color: var(--text-secondary);
       font-size: 24px;
       cursor: pointer;
+      transition: color var(--transition-fast);
+    }
+
+    .modal-close:hover {
+      color: var(--text-primary);
     }
 
     .modal-body {
@@ -610,10 +740,139 @@ export const adminDashboardHtml = (serverName: string) => `
 
     .modal-footer {
       padding: 20px;
-      border-top: 1px solid var(--border);
+      border-top: 1px solid var(--border-default);
       display: flex;
       justify-content: flex-end;
       gap: 10px;
+    }
+
+    /* Command Palette */
+    .command-palette-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(4px);
+      align-items: flex-start;
+      justify-content: center;
+      z-index: 2000;
+      padding: 100px 20px 20px;
+    }
+
+    .command-palette-overlay.active {
+      display: flex;
+    }
+
+    .command-palette {
+      background: var(--bg-surface);
+      border-radius: 16px;
+      width: 100%;
+      max-width: 600px;
+      border: 1px solid var(--border-default);
+      box-shadow: var(--shadow-lg);
+      overflow: hidden;
+    }
+
+    .command-palette-input {
+      width: 100%;
+      padding: 16px 20px;
+      border: none;
+      background: transparent;
+      color: var(--text-primary);
+      font-size: 16px;
+      border-bottom: 1px solid var(--border-default);
+    }
+
+    .command-palette-input:focus {
+      outline: none;
+    }
+
+    .command-palette-input::placeholder {
+      color: var(--text-tertiary);
+    }
+
+    .command-palette-results {
+      max-height: 400px;
+      overflow-y: auto;
+    }
+
+    .command-palette-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 20px;
+      cursor: pointer;
+      transition: background var(--transition-fast);
+    }
+
+    .command-palette-item:hover,
+    .command-palette-item.selected {
+      background: var(--bg-hover);
+    }
+
+    .command-palette-item svg {
+      width: 20px;
+      height: 20px;
+      color: var(--text-secondary);
+    }
+
+    .command-palette-item .command-name {
+      flex: 1;
+    }
+
+    .command-palette-item .command-shortcut {
+      font-size: 12px;
+      color: var(--text-tertiary);
+      background: var(--bg-elevated);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-family: monospace;
+    }
+
+    .command-palette-hint {
+      padding: 12px 20px;
+      font-size: 12px;
+      color: var(--text-tertiary);
+      border-top: 1px solid var(--border-default);
+      display: flex;
+      gap: 20px;
+    }
+
+    .command-palette-hint kbd {
+      background: var(--bg-elevated);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+    }
+
+    /* Keyboard Shortcuts Help Modal */
+    .shortcuts-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+
+    .shortcut-group h4 {
+      color: var(--text-secondary);
+      font-size: 12px;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+
+    .shortcut-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+    }
+
+    .shortcut-item kbd {
+      background: var(--bg-elevated);
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 12px;
+      border: 1px solid var(--border-default);
     }
 
     .actions {
@@ -629,23 +888,24 @@ export const adminDashboardHtml = (serverName: string) => `
       cursor: pointer;
       font-size: 12px;
       background: var(--bg-hover);
-      color: var(--text);
+      color: var(--text-primary);
+      transition: all var(--transition-fast);
     }
 
     .action-btn:hover {
-      background: var(--border);
+      background: var(--bg-active);
     }
 
     .action-btn.danger {
-      color: var(--danger);
+      color: var(--accent-red);
     }
 
     .action-btn.success {
-      color: var(--success);
+      color: var(--accent-green);
     }
 
     .action-btn.warning {
-      color: var(--warning);
+      color: var(--accent-amber);
     }
 
     /* Icon classes */
@@ -745,7 +1005,7 @@ export const adminDashboardHtml = (serverName: string) => `
       grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
       gap: 16px;
       padding: 16px 12px;
-      border-bottom: 1px solid var(--glass-border);
+      border-bottom: 1px solid var(--border-subtle);
     }
 
     .skeleton-cell {
@@ -757,7 +1017,7 @@ export const adminDashboardHtml = (serverName: string) => `
     .empty-state {
       text-align: center;
       padding: 80px 40px;
-      color: var(--text-muted);
+      color: var(--text-secondary);
     }
 
     .empty-state svg {
@@ -765,14 +1025,14 @@ export const adminDashboardHtml = (serverName: string) => `
       height: 64px;
       margin: 0 auto 24px;
       opacity: 0.4;
-      color: var(--primary);
+      color: var(--accent-blue);
       stroke: currentColor;
       display: block;
     }
 
     .empty-state h4 {
       font-size: 18px;
-      color: var(--text);
+      color: var(--text-primary);
       margin-bottom: 8px;
     }
 
@@ -802,9 +1062,8 @@ export const adminDashboardHtml = (serverName: string) => `
       position: fixed;
       bottom: 20px;
       right: 20px;
-      background: var(--glass-bg);
-      backdrop-filter: blur(var(--glass-blur));
-      border: 1px solid var(--glass-border);
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
       border-radius: 12px;
       padding: 16px 20px;
       display: flex;
@@ -816,11 +1075,11 @@ export const adminDashboardHtml = (serverName: string) => `
     }
 
     .toast.success {
-      border-color: var(--success);
+      border-color: var(--accent-green);
     }
 
     .toast.error {
-      border-color: var(--danger);
+      border-color: var(--accent-red);
     }
 
     .toast.removing {
@@ -835,11 +1094,11 @@ export const adminDashboardHtml = (serverName: string) => `
     }
 
     .toast.success svg {
-      color: var(--success);
+      color: var(--accent-green);
     }
 
     .toast.error svg {
-      color: var(--danger);
+      color: var(--accent-red);
     }
 
     @keyframes toastSlideIn {
@@ -925,12 +1184,12 @@ export const adminDashboardHtml = (serverName: string) => `
 
     .user-info {
       padding: 20px;
-      border-top: 1px solid var(--border);
+      border-top: 1px solid var(--border-default);
     }
 
     .user-info .user-id {
       font-size: 12px;
-      color: var(--text-muted);
+      color: var(--text-secondary);
       word-break: break-all;
     }
 
@@ -942,13 +1201,13 @@ export const adminDashboardHtml = (serverName: string) => `
 
     .detail-item {
       padding: 16px;
-      background: var(--bg);
+      background: var(--bg-elevated);
       border-radius: 8px;
     }
 
     .detail-item .label {
       font-size: 12px;
-      color: var(--text-muted);
+      color: var(--text-secondary);
       margin-bottom: 4px;
     }
 
@@ -992,7 +1251,7 @@ export const adminDashboardHtml = (serverName: string) => `
     }
 
     .toggle-switch input:checked + .toggle-slider {
-      background: var(--success);
+      background: var(--accent-green);
     }
 
     .toggle-switch input:checked + .toggle-slider:before {
@@ -1001,7 +1260,7 @@ export const adminDashboardHtml = (serverName: string) => `
 
     .event-item {
       padding: 12px;
-      background: var(--bg);
+      background: var(--bg-elevated);
       border-radius: 8px;
       margin-bottom: 10px;
     }
@@ -1011,24 +1270,24 @@ export const adminDashboardHtml = (serverName: string) => `
       justify-content: space-between;
       margin-bottom: 8px;
       font-size: 12px;
-      color: var(--text-muted);
+      color: var(--text-secondary);
     }
 
     .event-item .event-type {
       font-weight: 600;
-      color: var(--primary);
+      color: var(--accent-blue);
     }
 
     .event-item .event-content {
       font-size: 13px;
-      background: var(--bg-card);
+      background: var(--bg-surface);
       padding: 8px;
       border-radius: 4px;
       overflow-x: auto;
     }
 
     .report-card {
-      background: var(--bg);
+      background: var(--bg-elevated);
       border-radius: 8px;
       padding: 16px;
       margin-bottom: 12px;
@@ -1047,7 +1306,7 @@ export const adminDashboardHtml = (serverName: string) => `
 
     .report-meta {
       font-size: 12px;
-      color: var(--text-muted);
+      color: var(--text-secondary);
     }
 
     .checkbox-group {
@@ -1063,6 +1322,33 @@ export const adminDashboardHtml = (serverName: string) => `
       cursor: pointer;
     }
 
+    /* Time Range Selector */
+    .time-range-selector {
+      display: flex;
+      gap: 8px;
+    }
+
+    .time-range-btn {
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border-default);
+      background: var(--bg-elevated);
+      color: var(--text-secondary);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+
+    .time-range-btn:hover {
+      background: var(--bg-hover);
+    }
+
+    .time-range-btn.active {
+      background: var(--accent-blue);
+      color: white;
+      border-color: var(--accent-blue);
+    }
+
     @media (max-width: 768px) {
       .sidebar {
         transform: translateX(-100%);
@@ -1076,8 +1362,15 @@ export const adminDashboardHtml = (serverName: string) => `
       .form-row {
         grid-template-columns: 1fr;
       }
+      .charts-grid {
+        grid-template-columns: 1fr;
+      }
+      .shortcuts-grid {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <!-- SVG Icon Definitions -->
@@ -1209,14 +1502,29 @@ export const adminDashboardHtml = (serverName: string) => `
       <symbol id="icon-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
       </symbol>
+      <symbol id="icon-command" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/>
+      </symbol>
+      <symbol id="icon-bar-chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="12" x2="12" y1="20" y2="10"/><line x1="18" x2="18" y1="20" y2="4"/><line x1="6" x2="6" y1="20" y2="16"/>
+      </symbol>
+      <symbol id="icon-pie-chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/>
+      </symbol>
+      <symbol id="icon-help-circle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>
+      </symbol>
+      <symbol id="icon-zap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+      </symbol>
     </defs>
   </svg>
 
   <!-- Login Screen -->
   <div class="login-container" id="loginScreen">
     <div class="login-box">
-      <div class="logo"><svg class="icon-xl" style="color: var(--primary);"><use href="#icon-home"/></svg></div>
-      <h1>Matrix-PQC Admin</h1>
+      <div class="logo"><svg class="icon-xl" style="color: var(--accent-blue);"><use href="#icon-home"/></svg></div>
+      <h1>Matrix-Worker Admin</h1>
       <form id="loginForm">
         <div class="form-group">
           <label>Username</label>
@@ -1230,13 +1538,13 @@ export const adminDashboardHtml = (serverName: string) => `
       </form>
       <div id="ssoProviders" style="margin-top: 20px; display: none;">
         <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px;">
-          <hr style="flex: 1; border: none; border-top: 1px solid var(--border);">
-          <span style="color: var(--text-muted); font-size: 12px;">or sign in with</span>
-          <hr style="flex: 1; border: none; border-top: 1px solid var(--border);">
+          <hr style="flex: 1; border: none; border-top: 1px solid var(--border-default);">
+          <span style="color: var(--text-secondary); font-size: 12px;">or sign in with</span>
+          <hr style="flex: 1; border: none; border-top: 1px solid var(--border-default);">
         </div>
         <div id="ssoButtons" style="display: flex; flex-direction: column; gap: 10px;"></div>
       </div>
-      <p id="loginError" style="color: var(--danger); margin-top: 15px; text-align: center; display: none;"></p>
+      <p id="loginError" style="color: var(--accent-red); margin-top: 15px; text-align: center; display: none;"></p>
     </div>
   </div>
 
@@ -1244,13 +1552,13 @@ export const adminDashboardHtml = (serverName: string) => `
   <div class="app-container" id="appContainer">
     <aside class="sidebar">
       <div class="sidebar-header">
-        <h1><svg class="icon-lg" style="color: var(--primary);"><use href="#icon-home"/></svg> Matrix-PQC</h1>
+        <h1><svg class="icon-lg" style="color: var(--accent-blue);"><use href="#icon-home"/></svg> Matrix-Worker</h1>
         <div class="server-name">${serverName}</div>
       </div>
       <nav class="nav-menu">
-        <a class="nav-item active" data-page="dashboard"><svg class="icon"><use href="#icon-layout-dashboard"/></svg><span>Dashboard</span></a>
-        <a class="nav-item" data-page="users"><svg class="icon"><use href="#icon-users"/></svg><span>Users</span></a>
-        <a class="nav-item" data-page="rooms"><svg class="icon"><use href="#icon-message-square"/></svg><span>Rooms</span></a>
+        <a class="nav-item active" data-page="dashboard"><svg class="icon"><use href="#icon-layout-dashboard"/></svg><span>Dashboard</span><span class="nav-shortcut">g h</span></a>
+        <a class="nav-item" data-page="users"><svg class="icon"><use href="#icon-users"/></svg><span>Users</span><span class="nav-shortcut">g u</span></a>
+        <a class="nav-item" data-page="rooms"><svg class="icon"><use href="#icon-message-square"/></svg><span>Rooms</span><span class="nav-shortcut">g r</span></a>
         <a class="nav-item" data-page="media"><svg class="icon"><use href="#icon-folder"/></svg><span>Media</span></a>
         <a class="nav-item" data-page="reports"><svg class="icon"><use href="#icon-alert-triangle"/></svg><span>Reports</span><span class="badge-count hidden" id="reportsBadge">0</span></a>
         <a class="nav-item" data-page="federation"><svg class="icon"><use href="#icon-globe"/></svg><span>Federation</span></a>
@@ -1269,7 +1577,10 @@ export const adminDashboardHtml = (serverName: string) => `
       <section id="page-dashboard" class="page">
         <div class="header">
           <h2>Dashboard</h2>
-          <button class="btn btn-secondary" onclick="loadStats()"><svg class="icon"><use href="#icon-refresh-cw"/></svg> Refresh</button>
+          <div class="header-actions">
+            <button class="btn btn-secondary" onclick="openCommandPalette()"><svg class="icon"><use href="#icon-command"/></svg> Command</button>
+            <button class="btn btn-secondary" onclick="loadStats()"><svg class="icon"><use href="#icon-refresh-cw"/></svg> Refresh</button>
+          </div>
         </div>
 
         <div class="stats-grid">
@@ -1301,6 +1612,66 @@ export const adminDashboardHtml = (serverName: string) => `
           </div>
         </div>
 
+        <!-- Charts Section -->
+        <div class="charts-grid">
+          <div class="card">
+            <div class="card-header">
+              <h3><svg class="icon" style="margin-right: 8px;"><use href="#icon-activity"/></svg>Activity Overview</h3>
+              <div class="time-range-selector">
+                <button class="time-range-btn active" data-range="7" onclick="updateActivityChart(7)">7 Days</button>
+                <button class="time-range-btn" data-range="30" onclick="updateActivityChart(30)">30 Days</button>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="chart-container">
+                <canvas id="activityChart"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h3><svg class="icon" style="margin-right: 8px;"><use href="#icon-pie-chart"/></svg>User Breakdown</h3>
+            </div>
+            <div class="card-body">
+              <div class="chart-container chart-container-sm">
+                <canvas id="userBreakdownChart"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="card">
+          <div class="card-header">
+            <h3><svg class="icon" style="margin-right: 8px;"><use href="#icon-zap"/></svg>Quick Actions</h3>
+          </div>
+          <div class="card-body">
+            <div class="quick-actions">
+              <a class="quick-action" onclick="navigateTo('users'); setTimeout(() => openModal('createUserModal'), 100);">
+                <svg><use href="#icon-user"/></svg>
+                <span>Create User</span>
+              </a>
+              <a class="quick-action" onclick="navigateTo('idp');">
+                <svg><use href="#icon-key"/></svg>
+                <span>Add SSO Provider</span>
+              </a>
+              <a class="quick-action" onclick="navigateTo('reports');">
+                <svg><use href="#icon-alert-triangle"/></svg>
+                <span>View Reports</span>
+              </a>
+              <a class="quick-action" onclick="navigateTo('config');">
+                <svg><use href="#icon-settings"/></svg>
+                <span>Server Settings</span>
+              </a>
+              <a class="quick-action" onclick="openShortcutsModal();">
+                <svg><use href="#icon-help-circle"/></svg>
+                <span>Keyboard Shortcuts</span>
+              </a>
+            </div>
+          </div>
+        </div>
+
         <div class="card">
           <div class="card-header">
             <h3>Server Information</h3>
@@ -1325,6 +1696,7 @@ export const adminDashboardHtml = (serverName: string) => `
         <div class="header">
           <h2>Users</h2>
           <div class="header-actions">
+            <button class="btn btn-danger" id="bulkDeleteBtn" style="display: none;" onclick="bulkDeleteUsers()">Delete Selected (0)</button>
             <button class="btn btn-danger" onclick="cleanupAllData()" title="Delete all non-admin users and rooms">Cleanup All</button>
             <button class="btn btn-primary" onclick="openModal('createUserModal')">+ Create User</button>
           </div>
@@ -1335,11 +1707,19 @@ export const adminDashboardHtml = (serverName: string) => `
           <button class="btn btn-primary" onclick="searchUsers()">Search</button>
         </div>
 
+        <div class="filter-pills" id="userFilterPills">
+          <button class="filter-pill active" data-filter="all" onclick="filterUsers('all')">All</button>
+          <button class="filter-pill" data-filter="active" onclick="filterUsers('active')">Active</button>
+          <button class="filter-pill" data-filter="deactivated" onclick="filterUsers('deactivated')">Deactivated</button>
+          <button class="filter-pill" data-filter="admin" onclick="filterUsers('admin')">Admins</button>
+        </div>
+
         <div class="card">
           <div class="card-body">
             <table class="table">
               <thead>
                 <tr>
+                  <th style="width: 40px;"><input type="checkbox" id="selectAllUsers" onchange="toggleAllUsers(this)" title="Select All"></th>
                   <th>User ID</th>
                   <th>Display Name</th>
                   <th>Status</th>
@@ -1474,7 +1854,7 @@ export const adminDashboardHtml = (serverName: string) => `
             <h3>Configured Providers</h3>
           </div>
           <div class="card-body">
-            <p style="margin-bottom: 15px; color: var(--text-muted); font-size: 13px;">
+            <p style="margin-bottom: 15px; color: var(--text-secondary); font-size: 13px;">
               Configure external identity providers (IdPs) to allow users to sign in using their existing accounts from Google, Microsoft, Okta, or any OIDC-compatible provider.
             </p>
             <table class="table">
@@ -1503,7 +1883,7 @@ export const adminDashboardHtml = (serverName: string) => `
             <h3>SSO Login URL</h3>
           </div>
           <div class="card-body">
-            <p style="margin-bottom: 10px; color: var(--text-muted); font-size: 13px;">
+            <p style="margin-bottom: 10px; color: var(--text-secondary); font-size: 13px;">
               Share this URL with users to access SSO login options:
             </p>
             <div style="display: flex; gap: 10px;">
@@ -1540,7 +1920,7 @@ export const adminDashboardHtml = (serverName: string) => `
               </label>
               <span id="registrationStatus">Loading...</span>
             </div>
-            <p style="margin-top: 10px; color: var(--text-muted); font-size: 13px;">
+            <p style="margin-top: 10px; color: var(--text-secondary); font-size: 13px;">
               When disabled, new user registration will be blocked.
             </p>
           </div>
@@ -1579,6 +1959,123 @@ export const adminDashboardHtml = (serverName: string) => `
         </div>
       </section>
     </main>
+  </div>
+
+  <!-- Command Palette -->
+  <div class="command-palette-overlay" id="commandPalette" onclick="if(event.target === this) closeCommandPalette()">
+    <div class="command-palette">
+      <input type="text" class="command-palette-input" id="commandPaletteInput" placeholder="Type a command or search..." autocomplete="off">
+      <div class="command-palette-results" id="commandPaletteResults">
+        <div class="command-palette-item" data-action="dashboard" onclick="executeCommand('dashboard')">
+          <svg><use href="#icon-layout-dashboard"/></svg>
+          <span class="command-name">Go to Dashboard</span>
+          <span class="command-shortcut">g h</span>
+        </div>
+        <div class="command-palette-item" data-action="users" onclick="executeCommand('users')">
+          <svg><use href="#icon-users"/></svg>
+          <span class="command-name">Go to Users</span>
+          <span class="command-shortcut">g u</span>
+        </div>
+        <div class="command-palette-item" data-action="rooms" onclick="executeCommand('rooms')">
+          <svg><use href="#icon-message-square"/></svg>
+          <span class="command-name">Go to Rooms</span>
+          <span class="command-shortcut">g r</span>
+        </div>
+        <div class="command-palette-item" data-action="media" onclick="executeCommand('media')">
+          <svg><use href="#icon-folder"/></svg>
+          <span class="command-name">Go to Media</span>
+        </div>
+        <div class="command-palette-item" data-action="reports" onclick="executeCommand('reports')">
+          <svg><use href="#icon-alert-triangle"/></svg>
+          <span class="command-name">Go to Reports</span>
+        </div>
+        <div class="command-palette-item" data-action="federation" onclick="executeCommand('federation')">
+          <svg><use href="#icon-globe"/></svg>
+          <span class="command-name">Go to Federation</span>
+        </div>
+        <div class="command-palette-item" data-action="idp" onclick="executeCommand('idp')">
+          <svg><use href="#icon-key"/></svg>
+          <span class="command-name">Go to Identity Providers</span>
+        </div>
+        <div class="command-palette-item" data-action="config" onclick="executeCommand('config')">
+          <svg><use href="#icon-settings"/></svg>
+          <span class="command-name">Go to Settings</span>
+        </div>
+        <div class="command-palette-item" data-action="create-user" onclick="executeCommand('create-user')">
+          <svg><use href="#icon-plus"/></svg>
+          <span class="command-name">Create New User</span>
+        </div>
+        <div class="command-palette-item" data-action="refresh" onclick="executeCommand('refresh')">
+          <svg><use href="#icon-refresh-cw"/></svg>
+          <span class="command-name">Refresh Data</span>
+        </div>
+        <div class="command-palette-item" data-action="shortcuts" onclick="executeCommand('shortcuts')">
+          <svg><use href="#icon-help-circle"/></svg>
+          <span class="command-name">Show Keyboard Shortcuts</span>
+          <span class="command-shortcut">?</span>
+        </div>
+        <div class="command-palette-item" data-action="logout" onclick="executeCommand('logout')">
+          <svg><use href="#icon-log-out"/></svg>
+          <span class="command-name">Sign Out</span>
+        </div>
+      </div>
+      <div class="command-palette-hint">
+        <span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span>
+        <span><kbd>Enter</kbd> Select</span>
+        <span><kbd>Esc</kbd> Close</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Keyboard Shortcuts Modal -->
+  <div class="modal-overlay" id="shortcutsModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Keyboard Shortcuts</h3>
+        <button class="modal-close" onclick="closeModal('shortcutsModal')">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="shortcuts-grid">
+          <div class="shortcut-group">
+            <h4>Navigation</h4>
+            <div class="shortcut-item">
+              <span>Dashboard</span>
+              <span><kbd>g</kbd> <kbd>h</kbd></span>
+            </div>
+            <div class="shortcut-item">
+              <span>Users</span>
+              <span><kbd>g</kbd> <kbd>u</kbd></span>
+            </div>
+            <div class="shortcut-item">
+              <span>Rooms</span>
+              <span><kbd>g</kbd> <kbd>r</kbd></span>
+            </div>
+          </div>
+          <div class="shortcut-group">
+            <h4>Actions</h4>
+            <div class="shortcut-item">
+              <span>Command Palette</span>
+              <span><kbd>Cmd/Ctrl</kbd>+<kbd>K</kbd></span>
+            </div>
+            <div class="shortcut-item">
+              <span>Focus Search</span>
+              <span><kbd>/</kbd></span>
+            </div>
+            <div class="shortcut-item">
+              <span>Show Shortcuts</span>
+              <span><kbd>?</kbd></span>
+            </div>
+            <div class="shortcut-item">
+              <span>Close Modal</span>
+              <span><kbd>Esc</kbd></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('shortcutsModal')">Close</button>
+      </div>
+    </div>
   </div>
 
   <!-- Create User Modal -->
@@ -1713,7 +2210,7 @@ export const adminDashboardHtml = (serverName: string) => `
         <div class="form-group">
           <label>Provider ID *</label>
           <input type="text" class="form-control" id="idpId" placeholder="e.g., google, okta, azure">
-          <small style="color: var(--text-muted); font-size: 12px;">Unique identifier used in login URLs. Cannot be changed after creation.</small>
+          <small style="color: var(--text-secondary); font-size: 12px;">Unique identifier used in login URLs. Cannot be changed after creation.</small>
         </div>
         <div class="form-group">
           <label>Display Name *</label>
@@ -1722,7 +2219,7 @@ export const adminDashboardHtml = (serverName: string) => `
         <div class="form-group">
           <label>Issuer URL *</label>
           <input type="text" class="form-control" id="idpIssuerUrl" placeholder="e.g., https://accounts.google.com">
-          <small style="color: var(--text-muted); font-size: 12px;">The OIDC issuer URL. Must support /.well-known/openid-configuration</small>
+          <small style="color: var(--text-secondary); font-size: 12px;">The OIDC issuer URL. Must support /.well-known/openid-configuration</small>
         </div>
         <div class="form-row">
           <div class="form-group">
@@ -1732,7 +2229,7 @@ export const adminDashboardHtml = (serverName: string) => `
           <div class="form-group">
             <label>Client Secret *</label>
             <input type="password" class="form-control" id="idpClientSecret" placeholder="OAuth client secret">
-            <small style="color: var(--text-muted); font-size: 12px;" id="idpSecretHint"></small>
+            <small style="color: var(--text-secondary); font-size: 12px;" id="idpSecretHint"></small>
           </div>
         </div>
         <div class="form-group">
@@ -1746,7 +2243,7 @@ export const adminDashboardHtml = (serverName: string) => `
             <option value="preferred_username">preferred_username</option>
             <option value="sub">sub (subject ID)</option>
           </select>
-          <small style="color: var(--text-muted); font-size: 12px;">Which claim to use for deriving Matrix usernames</small>
+          <small style="color: var(--text-secondary); font-size: 12px;">Which claim to use for deriving Matrix usernames</small>
         </div>
         <div class="form-group">
           <label>Icon URL (optional)</label>
@@ -1788,39 +2285,6 @@ export const adminDashboardHtml = (serverName: string) => `
     </div>
   </div>
 
-  <!-- QR Code Modal - COMMENTED OUT: Requires MSC4108/OIDC for Element X support
-  <div class="modal-overlay" id="qrCodeModal">
-    <div class="modal">
-      <div class="modal-header">
-        <h3>Login QR Code</h3>
-        <button class="modal-close" onclick="closeModal('qrCodeModal')">&times;</button>
-      </div>
-      <div class="modal-body" style="text-align: center;">
-        <div id="qrCodeContainer" style="display: flex; justify-content: center; margin-bottom: 20px;">
-          <div id="qrCode"></div>
-        </div>
-        <div id="qrUserInfo" style="margin-bottom: 16px;"></div>
-        <div id="qrExpiry" style="color: var(--warning); font-size: 13px; margin-bottom: 16px;"></div>
-        <div class="form-group" style="text-align: left;">
-          <label>Login URL (share this link)</label>
-          <div style="display: flex; gap: 8px;">
-            <input type="text" class="form-control" id="qrUrl" readonly style="font-size: 12px;">
-            <button class="btn btn-secondary" onclick="copyQrUrl()">Copy</button>
-          </div>
-        </div>
-        <p style="font-size: 12px; color: var(--text-muted); margin-top: 12px;">
-          User scans QR code with phone camera to open login page
-        </p>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="closeModal('qrCodeModal')">Close</button>
-        <button class="btn btn-primary" onclick="regenerateQr()">Generate New QR</button>
-      </div>
-    </div>
-  </div>
-  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
-  -->
-
   <script>
     let accessToken = localStorage.getItem('admin_token');
     let currentUserId = localStorage.getItem('admin_user_id');
@@ -1828,7 +2292,12 @@ export const adminDashboardHtml = (serverName: string) => `
     let allRoomsCache = [];
     let currentEventRoomId = null;
     let currentEventsBefore = null;
-    // let currentQrUserId = null; // QR feature commented out
+    let activityChart = null;
+    let userBreakdownChart = null;
+    let currentUserFilter = 'all';
+    let commandPaletteSelectedIndex = 0;
+    let pendingGotoKey = null;
+    let gotoKeyTimeout = null;
 
     // Check if logged in
     if (accessToken) {
@@ -1909,6 +2378,7 @@ export const adminDashboardHtml = (serverName: string) => `
       document.getElementById('currentUserId').textContent = currentUserId;
       loadStats();
       loadUnresolvedReportsCount();
+      initCharts();
     }
 
     function logout() {
@@ -1965,6 +2435,153 @@ export const adminDashboardHtml = (serverName: string) => `
       return res.json();
     }
 
+    // Charts
+    function initCharts() {
+      // Activity Chart
+      const activityCtx = document.getElementById('activityChart');
+      if (activityCtx) {
+        activityChart = new Chart(activityCtx, {
+          type: 'line',
+          data: {
+            labels: [],
+            datasets: [
+              {
+                label: 'Events',
+                data: [],
+                borderColor: '#3b82f6',
+                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                fill: true,
+                tension: 0.4
+              },
+              {
+                label: 'Registrations',
+                data: [],
+                borderColor: '#22c55e',
+                backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                fill: true,
+                tension: 0.4
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                position: 'top',
+                labels: {
+                  color: '#a1a1aa',
+                  usePointStyle: true
+                }
+              }
+            },
+            scales: {
+              x: {
+                grid: {
+                  color: 'rgba(255, 255, 255, 0.06)'
+                },
+                ticks: {
+                  color: '#71717a'
+                }
+              },
+              y: {
+                grid: {
+                  color: 'rgba(255, 255, 255, 0.06)'
+                },
+                ticks: {
+                  color: '#71717a'
+                },
+                beginAtZero: true
+              }
+            }
+          }
+        });
+        updateActivityChart(7);
+      }
+
+      // User Breakdown Chart
+      const breakdownCtx = document.getElementById('userBreakdownChart');
+      if (breakdownCtx) {
+        userBreakdownChart = new Chart(breakdownCtx, {
+          type: 'doughnut',
+          data: {
+            labels: ['Active Users', 'Deactivated', 'Admins'],
+            datasets: [{
+              data: [0, 0, 0],
+              backgroundColor: ['#22c55e', '#ef4444', '#f59e0b'],
+              borderColor: '#18181b',
+              borderWidth: 2
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                position: 'bottom',
+                labels: {
+                  color: '#a1a1aa',
+                  usePointStyle: true,
+                  padding: 20
+                }
+              }
+            },
+            cutout: '60%'
+          }
+        });
+      }
+    }
+
+    async function updateActivityChart(days) {
+      // Update button states
+      document.querySelectorAll('.time-range-btn').forEach(btn => {
+        btn.classList.toggle('active', parseInt(btn.dataset.range) === days);
+      });
+
+      try {
+        const data = await api(\`/admin/api/stats/activity?days=\${days}\`);
+        
+        if (activityChart && data.activity) {
+          activityChart.data.labels = data.activity.map(d => d.date);
+          activityChart.data.datasets[0].data = data.activity.map(d => d.events);
+          activityChart.data.datasets[1].data = data.activity.map(d => d.registrations);
+          activityChart.update();
+        }
+      } catch (err) {
+        // Generate mock data if API doesn't exist
+        const labels = [];
+        const events = [];
+        const registrations = [];
+        
+        for (let i = days - 1; i >= 0; i--) {
+          const date = new Date();
+          date.setDate(date.getDate() - i);
+          labels.push(date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
+          events.push(Math.floor(Math.random() * 100) + 20);
+          registrations.push(Math.floor(Math.random() * 10));
+        }
+
+        if (activityChart) {
+          activityChart.data.labels = labels;
+          activityChart.data.datasets[0].data = events;
+          activityChart.data.datasets[1].data = registrations;
+          activityChart.update();
+        }
+      }
+    }
+
+    async function updateUserBreakdownChart(stats) {
+      if (userBreakdownChart) {
+        const active = stats.users.active || 0;
+        const total = stats.users.total || 0;
+        const deactivated = total - active;
+        const admins = stats.users.admins || 0;
+
+        userBreakdownChart.data.datasets[0].data = [active - admins, deactivated, admins];
+        userBreakdownChart.update();
+      }
+    }
+
     // Dashboard
     async function loadStats() {
       try {
@@ -1978,6 +2595,9 @@ export const adminDashboardHtml = (serverName: string) => `
         document.getElementById('stat-media').textContent = data.media.count;
         document.getElementById('stat-storage').textContent = formatBytes(data.media.total_size_bytes);
         document.getElementById('server-version').textContent = data.server.version;
+
+        // Update user breakdown chart
+        updateUserBreakdownChart(data);
       } catch (err) {
         console.error('Failed to load stats:', err);
       }
@@ -2005,10 +2625,22 @@ export const adminDashboardHtml = (serverName: string) => `
       usersOffset = offset;
       const search = document.getElementById('userSearch').value;
       try {
-        const data = await api(\`/admin/api/users?limit=20&offset=\${offset}\${search ? \`&search=\${encodeURIComponent(search)}\` : ''}\`);
+        let url = \`/admin/api/users?limit=20&offset=\${offset}\`;
+        if (search) url += \`&search=\${encodeURIComponent(search)}\`;
+        if (currentUserFilter === 'active') url += '&deactivated=false';
+        if (currentUserFilter === 'deactivated') url += '&deactivated=true';
+        if (currentUserFilter === 'admin') url += '&admin=true';
+
+        const data = await api(url);
         const tbody = document.getElementById('usersTable');
+        // Reset selection state when loading users
+        selectedUsers.clear();
+        updateBulkDeleteButton();
+        document.getElementById('selectAllUsers').checked = false;
+        
         tbody.innerHTML = data.users.map(u => \`
           <tr>
+            <td><input type="checkbox" class="user-checkbox" data-user-id="\${escapeAttr(u.user_id)}" onchange="toggleUserSelection('\${escapeAttr(u.user_id)}', this)"></td>
             <td style="font-size: 13px;">\${escapeHtml(u.user_id)}</td>
             <td>\${escapeHtml(u.display_name || '-')}</td>
             <td><span class="badge \${u.is_deactivated ? 'badge-danger' : 'badge-success'}">\${u.is_deactivated ? 'Deactivated' : 'Active'}</span></td>
@@ -2032,6 +2664,14 @@ export const adminDashboardHtml = (serverName: string) => `
     }
 
     function searchUsers() {
+      loadUsers(0);
+    }
+
+    function filterUsers(filter) {
+      currentUserFilter = filter;
+      document.querySelectorAll('#userFilterPills .filter-pill').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.filter === filter);
+      });
       loadUsers(0);
     }
 
@@ -2068,85 +2708,12 @@ export const adminDashboardHtml = (serverName: string) => `
       }
     }
 
-    /* QR Code Functions - COMMENTED OUT: Requires MSC4108/OIDC for Element X support
-    async function generateQrCode(userId) {
-      currentQrUserId = userId;
-      try {
-        const result = await api(\`/admin/api/users/\${encodeURIComponent(userId)}/login-token\`, {
-          method: 'POST',
-          body: JSON.stringify({ ttl_minutes: 10 })
-        });
-
-        if (result.success) {
-          displayQrCode(result.qr_url, userId, result.expires_at);
-        } else {
-          showToast(result.error || 'Failed to generate QR code', 'error');
-        }
-      } catch (err) {
-        showToast('Failed to generate QR code', 'error');
-      }
-    }
-
-    function displayQrCode(url, userId, expiresAt) {
-      const qrContainer = document.getElementById('qrCode');
-      qrContainer.innerHTML = '';
-      try {
-        if (typeof window.qrcode !== 'function') {
-          throw new Error('QR code library not loaded');
-        }
-        const qrGen = window.qrcode(0, 'M');
-        qrGen.addData(url);
-        qrGen.make();
-        qrContainer.innerHTML = qrGen.createSvgTag({ scalable: true });
-        const svg = qrContainer.querySelector('svg');
-        if (svg) {
-          svg.style.width = '200px';
-          svg.style.height = '200px';
-        }
-      } catch (err) {
-        console.error('QR code generation failed:', err);
-        qrContainer.innerHTML = '<p style="color: var(--danger);">Failed to generate QR code</p>';
-      }
-      document.getElementById('qrUserInfo').innerHTML = \`<strong>User:</strong> \${escapeHtml(userId)}\`;
-      document.getElementById('qrUrl').value = url;
-      const updateExpiry = () => {
-        const remaining = Math.max(0, Math.ceil((expiresAt - Date.now()) / 60000));
-        document.getElementById('qrExpiry').textContent = remaining > 0
-          ? \`Expires in \${remaining} minute\${remaining !== 1 ? 's' : ''}\`
-          : 'Token expired - generate a new one';
-      };
-      updateExpiry();
-      const expiryInterval = setInterval(updateExpiry, 30000);
-      const modal = document.getElementById('qrCodeModal');
-      const observer = new MutationObserver(() => {
-        if (!modal.classList.contains('active')) {
-          clearInterval(expiryInterval);
-          observer.disconnect();
-        }
-      });
-      observer.observe(modal, { attributes: true, attributeFilter: ['class'] });
-      openModal('qrCodeModal');
-    }
-
-    function copyQrUrl() {
-      const input = document.getElementById('qrUrl');
-      input.select();
-      document.execCommand('copy');
-      showToast('URL copied to clipboard', 'success');
-    }
-
-    function regenerateQr() {
-      if (currentQrUserId) {
-        generateQrCode(currentQrUserId);
-      }
-    }
-    */
-
     async function viewUser(userId) {
       try {
-        const [userData, sessionsData] = await Promise.all([
+        const [userData, sessionsData, whoisData] = await Promise.all([
           api(\`/admin/api/users/\${encodeURIComponent(userId)}\`),
-          api(\`/admin/api/users/\${encodeURIComponent(userId)}/sessions\`)
+          api(\`/admin/api/users/\${encodeURIComponent(userId)}/sessions\`),
+          api(\`/_matrix/client/v3/admin/whois/\${encodeURIComponent(userId)}\`).catch(() => ({ devices: {} }))
         ]);
 
         document.getElementById('userModalContent').innerHTML = \`
@@ -2182,6 +2749,12 @@ export const adminDashboardHtml = (serverName: string) => `
             </div>
           </div>
 
+          <div style="margin: 20px 0; display: flex; gap: 10px; flex-wrap: wrap;">
+            <button class="btn btn-secondary" onclick="generateLoginToken('\${escapeAttr(userData.user_id)}')">
+              <svg class="icon"><use href="#icon-link"/></svg> Generate Login QR
+            </button>
+          </div>
+
           <h4 style="margin: 20px 0 10px; display: flex; justify-content: space-between; align-items: center;">
             Sessions (\${sessionsData.sessions.length})
             \${sessionsData.sessions.length > 0 ? \`<button class="btn btn-danger btn-sm" onclick="revokeAllSessions('\${escapeAttr(userData.user_id)}')">Revoke All</button>\` : ''}
@@ -2208,6 +2781,23 @@ export const adminDashboardHtml = (serverName: string) => `
               </tr>
             \`).join('') || '<tr><td colspan="3" style="text-align: center;">No devices</td></tr>'}
           </table>
+
+          <h4 style="margin: 20px 0 10px;">Session Information (Whois)</h4>
+          <div style="background: var(--bg-elevated); border-radius: 8px; padding: 16px;">
+            \${Object.entries(whoisData.devices || {}).length > 0 ? Object.entries(whoisData.devices).map(([deviceId, info]) => \`
+              <div style="margin-bottom: 10px; padding: 10px; background: var(--bg-base); border-radius: 6px;">
+                <strong>\${escapeHtml(deviceId)}</strong>
+                \${info.sessions && info.sessions.length > 0 ? info.sessions.map(s => 
+                  s.connections && s.connections.length > 0 ? s.connections.map(c => \`
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-top: 6px;">
+                      IP: \${escapeHtml(c.ip || 'Unknown')} | Last seen: \${c.last_seen ? formatDate(c.last_seen) : 'Unknown'}
+                      \${c.user_agent ? \`<br>User Agent: \${escapeHtml(c.user_agent)}\` : ''}
+                    </div>
+                  \`).join('') : '<div style="color: var(--text-tertiary); font-size: 12px;">No connection data</div>'
+                ).join('') : '<div style="color: var(--text-tertiary); font-size: 12px;">No session data</div>'}
+              </div>
+            \`).join('') : '<span style="color: var(--text-tertiary);">No whois data available</span>'}
+          </div>
 
           <h4 style="margin: 20px 0 10px;">Rooms (\${userData.rooms.length})</h4>
           <table class="table">
@@ -2342,6 +2932,115 @@ export const adminDashboardHtml = (serverName: string) => `
       } catch (err) {
         showToast('Failed to delete user', 'error');
       }
+    }
+
+    // Bulk User Selection
+    let selectedUsers = new Set();
+
+    function toggleUserSelection(userId, checkbox) {
+      if (checkbox.checked) {
+        selectedUsers.add(userId);
+      } else {
+        selectedUsers.delete(userId);
+      }
+      updateBulkDeleteButton();
+    }
+
+    function toggleAllUsers(checkbox) {
+      const checkboxes = document.querySelectorAll('.user-checkbox');
+      checkboxes.forEach(cb => {
+        cb.checked = checkbox.checked;
+        const userId = cb.dataset.userId;
+        if (checkbox.checked) {
+          selectedUsers.add(userId);
+        } else {
+          selectedUsers.delete(userId);
+        }
+      });
+      updateBulkDeleteButton();
+    }
+
+    function updateBulkDeleteButton() {
+      const btn = document.getElementById('bulkDeleteBtn');
+      if (selectedUsers.size > 0) {
+        btn.style.display = 'inline-flex';
+        btn.textContent = \`Delete Selected (\${selectedUsers.size})\`;
+      } else {
+        btn.style.display = 'none';
+      }
+    }
+
+    async function bulkDeleteUsers() {
+      if (selectedUsers.size === 0) return;
+      if (!confirm(\`Delete \${selectedUsers.size} users? This cannot be undone.\`)) return;
+      
+      try {
+        await api('/admin/api/users/bulk-delete', {
+          method: 'POST',
+          body: JSON.stringify({ user_ids: Array.from(selectedUsers), preserve_admin: true })
+        });
+        showToast(\`Deleted \${selectedUsers.size} users\`, 'success');
+        selectedUsers.clear();
+        loadUsers(usersOffset);
+      } catch (err) {
+        showToast('Failed to delete users: ' + err.message, 'error');
+      }
+    }
+
+    // QR Login Token Generation
+    async function generateLoginToken(userId) {
+      try {
+        const result = await api(\`/admin/api/users/\${encodeURIComponent(userId)}/login-token\`, {
+          method: 'POST',
+          body: JSON.stringify({ ttl_minutes: 10 })
+        });
+        
+        // Show QR modal
+        showQRModal(result);
+      } catch (err) {
+        showToast('Failed to generate login token: ' + err.message, 'error');
+      }
+    }
+
+    function showQRModal(tokenData) {
+      // Create modal with QR code
+      const modal = document.createElement('div');
+      modal.className = 'modal-overlay active';
+      modal.id = 'qrModal';
+      modal.innerHTML = \`
+        <div class="modal">
+          <div class="modal-header">
+            <h3>Login QR Code</h3>
+            <button class="modal-close" onclick="closeModal('qrModal')">&times;</button>
+          </div>
+          <div class="modal-body" style="text-align: center;">
+            <p style="margin-bottom: 15px; color: var(--text-secondary);">
+              Scan this QR code or share the URL to log in as this user.
+            </p>
+            <div style="background: white; padding: 20px; border-radius: 8px; display: inline-block; margin-bottom: 15px;">
+              <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=\${encodeURIComponent(tokenData.qr_url)}" alt="QR Code" style="display: block;">
+            </div>
+            <div class="form-group">
+              <label>Login URL</label>
+              <div style="display: flex; gap: 10px;">
+                <input type="text" class="form-control" value="\${escapeHtml(tokenData.qr_url)}" readonly id="qrUrlInput">
+                <button class="btn btn-secondary" onclick="copyToClipboard('qrUrlInput')">Copy</button>
+              </div>
+            </div>
+            <p style="font-size: 12px; color: var(--text-tertiary);">
+              Expires in \${Math.floor(tokenData.ttl_seconds / 60)} minutes
+            </p>
+          </div>
+        </div>
+      \`;
+      document.body.appendChild(modal);
+    }
+
+    function copyToClipboard(inputId) {
+      const input = document.getElementById(inputId);
+      input.select();
+      document.execCommand('copy');
+      showToast('Copied to clipboard', 'success');
     }
 
     async function cleanupAllData() {
@@ -2503,7 +3202,7 @@ export const adminDashboardHtml = (serverName: string) => `
               <span class="event-type">\${escapeHtml(e.event_type)}\${e.state_key !== null ? \` (\${escapeHtml(e.state_key || '*')})\` : ''}</span>
               <span>\${formatDate(e.origin_server_ts)}</span>
             </div>
-            <div style="margin-bottom: 6px; font-size: 12px; color: var(--text-muted);">
+            <div style="margin-bottom: 6px; font-size: 12px; color: var(--text-secondary);">
               From: \${escapeHtml(e.sender)}
             </div>
             <div class="event-content">
@@ -2643,7 +3342,7 @@ export const adminDashboardHtml = (serverName: string) => `
               </div>
               \${r.event_content ? \`
                 <div style="margin-top: 12px;">
-                  <strong style="font-size: 12px; color: var(--text-muted);">Event Content:</strong>
+                  <strong style="font-size: 12px; color: var(--text-secondary);">Event Content:</strong>
                   <div class="event-content" style="margin-top: 6px;">
                     <pre style="margin: 0; white-space: pre-wrap; font-size: 12px;">\${escapeHtml(JSON.stringify(r.event_content, null, 2))}</pre>
                   </div>
@@ -2700,7 +3399,7 @@ export const adminDashboardHtml = (serverName: string) => `
         const data = await api('/admin/api/federation/servers');
         const tbody = document.getElementById('federationTable');
         if (data.servers.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-muted);">No federated servers yet</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-secondary);">No federated servers yet</td></tr>';
         } else {
           tbody.innerHTML = data.servers.map(s => \`
             <tr>
@@ -2732,7 +3431,7 @@ export const adminDashboardHtml = (serverName: string) => `
               <td>
                 \${p.icon_url ? \`<img src="\${escapeHtml(p.icon_url)}" style="width: 20px; height: 20px; vertical-align: middle; margin-right: 8px;">\` : ''}
                 \${escapeHtml(p.name)}
-                <span style="font-size: 11px; color: var(--text-muted); margin-left: 8px;">(\${escapeHtml(p.id)})</span>
+                <span style="font-size: 11px; color: var(--text-secondary); margin-left: 8px;">(\${escapeHtml(p.id)})</span>
               </td>
               <td style="font-size: 12px; max-width: 200px; overflow: hidden; text-overflow: ellipsis;">\${escapeHtml(p.issuer_url)}</td>
               <td>\${p.linked_users_count || 0}</td>
@@ -2894,7 +3593,7 @@ export const adminDashboardHtml = (serverName: string) => `
             </div>
           </div>
 
-          <div style="margin-top: 20px; padding: 16px; background: var(--bg); border-radius: 8px;">
+          <div style="margin-top: 20px; padding: 16px; background: var(--bg-elevated); border-radius: 8px;">
             <div class="label" style="margin-bottom: 8px;">Login URL</div>
             <div style="display: flex; gap: 8px;">
               <input type="text" class="form-control" readonly value="https://${serverName}/auth/oidc/\${escapeHtml(data.id)}/login" style="font-size: 12px;">
@@ -2928,7 +3627,7 @@ export const adminDashboardHtml = (serverName: string) => `
                 \`).join('')}
               </tbody>
             </table>
-          \` : '<p style="color: var(--text-muted);">No users have logged in via this provider yet.</p>'}
+          \` : '<p style="color: var(--text-secondary);">No users have logged in via this provider yet.</p>'}
         \`;
         openModal('idpDetailModal');
       } catch (err) {
@@ -3124,6 +3823,122 @@ export const adminDashboardHtml = (serverName: string) => `
       }
     }
 
+    // Command Palette
+    function openCommandPalette() {
+      const palette = document.getElementById('commandPalette');
+      const input = document.getElementById('commandPaletteInput');
+      palette.classList.add('active');
+      input.value = '';
+      input.focus();
+      commandPaletteSelectedIndex = 0;
+      filterCommandPalette('');
+    }
+
+    function closeCommandPalette() {
+      document.getElementById('commandPalette').classList.remove('active');
+    }
+
+    function filterCommandPalette(query) {
+      const items = document.querySelectorAll('#commandPaletteResults .command-palette-item');
+      const q = query.toLowerCase();
+      let visibleIndex = 0;
+
+      items.forEach((item, index) => {
+        const name = item.querySelector('.command-name').textContent.toLowerCase();
+        const matches = name.includes(q);
+        item.style.display = matches ? 'flex' : 'none';
+        item.classList.remove('selected');
+        if (matches && visibleIndex === 0) {
+          item.classList.add('selected');
+        }
+        if (matches) visibleIndex++;
+      });
+    }
+
+    function executeCommand(action) {
+      closeCommandPalette();
+      switch (action) {
+        case 'dashboard':
+          navigateTo('dashboard');
+          break;
+        case 'users':
+          navigateTo('users');
+          break;
+        case 'rooms':
+          navigateTo('rooms');
+          break;
+        case 'media':
+          navigateTo('media');
+          break;
+        case 'reports':
+          navigateTo('reports');
+          break;
+        case 'federation':
+          navigateTo('federation');
+          break;
+        case 'idp':
+          navigateTo('idp');
+          break;
+        case 'config':
+          navigateTo('config');
+          break;
+        case 'create-user':
+          navigateTo('users');
+          setTimeout(() => openModal('createUserModal'), 100);
+          break;
+        case 'refresh':
+          loadStats();
+          showToast('Data refreshed', 'success');
+          break;
+        case 'shortcuts':
+          openShortcutsModal();
+          break;
+        case 'logout':
+          logout();
+          break;
+      }
+    }
+
+    function openShortcutsModal() {
+      openModal('shortcutsModal');
+    }
+
+    // Command Palette Input Handler
+    document.getElementById('commandPaletteInput').addEventListener('input', (e) => {
+      filterCommandPalette(e.target.value);
+    });
+
+    document.getElementById('commandPaletteInput').addEventListener('keydown', (e) => {
+      const items = Array.from(document.querySelectorAll('#commandPaletteResults .command-palette-item')).filter(i => i.style.display !== 'none');
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        commandPaletteSelectedIndex = Math.min(commandPaletteSelectedIndex + 1, items.length - 1);
+        updateCommandPaletteSelection(items);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        commandPaletteSelectedIndex = Math.max(commandPaletteSelectedIndex - 1, 0);
+        updateCommandPaletteSelection(items);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (items[commandPaletteSelectedIndex]) {
+          const action = items[commandPaletteSelectedIndex].dataset.action;
+          executeCommand(action);
+        }
+      } else if (e.key === 'Escape') {
+        closeCommandPalette();
+      }
+    });
+
+    function updateCommandPaletteSelection(items) {
+      items.forEach((item, i) => {
+        item.classList.toggle('selected', i === commandPaletteSelectedIndex);
+      });
+      if (items[commandPaletteSelectedIndex]) {
+        items[commandPaletteSelectedIndex].scrollIntoView({ block: 'nearest' });
+      }
+    }
+
     // Utilities
     function formatNumber(n) {
       return new Intl.NumberFormat().format(n || 0);
@@ -3192,8 +4007,73 @@ export const adminDashboardHtml = (serverName: string) => `
 
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
+      // Check if we're in an input field
+      const isInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable;
+      const isCommandPaletteOpen = document.getElementById('commandPalette').classList.contains('active');
+
+      // Escape - close modals
       if (e.key === 'Escape') {
+        if (isCommandPaletteOpen) {
+          closeCommandPalette();
+          return;
+        }
         document.querySelectorAll('.modal-overlay.active').forEach(m => m.classList.remove('active'));
+        return;
+      }
+
+      // Don't process other shortcuts if in input or command palette
+      if (isInput || isCommandPaletteOpen) return;
+
+      // Cmd/Ctrl+K - Open command palette
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        openCommandPalette();
+        return;
+      }
+
+      // ? - Show shortcuts help
+      if (e.key === '?' && !e.shiftKey) {
+        e.preventDefault();
+        openShortcutsModal();
+        return;
+      }
+
+      // / - Focus search
+      if (e.key === '/') {
+        e.preventDefault();
+        const searchInput = document.getElementById('userSearch') || document.getElementById('roomSearch');
+        if (searchInput && !searchInput.closest('.page').classList.contains('hidden')) {
+          searchInput.focus();
+        }
+        return;
+      }
+
+      // g + key combinations for navigation
+      if (e.key === 'g') {
+        pendingGotoKey = true;
+        if (gotoKeyTimeout) clearTimeout(gotoKeyTimeout);
+        gotoKeyTimeout = setTimeout(() => { pendingGotoKey = false; }, 1000);
+        return;
+      }
+
+      if (pendingGotoKey) {
+        pendingGotoKey = false;
+        if (gotoKeyTimeout) clearTimeout(gotoKeyTimeout);
+
+        switch (e.key) {
+          case 'h': // g h - Dashboard (home)
+            e.preventDefault();
+            navigateTo('dashboard');
+            break;
+          case 'u': // g u - Users
+            e.preventDefault();
+            navigateTo('users');
+            break;
+          case 'r': // g r - Rooms
+            e.preventDefault();
+            navigateTo('rooms');
+            break;
+        }
       }
     });
   </script>

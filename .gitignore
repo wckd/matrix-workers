@@ -33,6 +33,9 @@ coverage/
 # Local MCP config
 .mcp.json
 
+# OpenCode
+.opencode/
+
 # Droplet/infrastructure scripts and configs
 *.sh
 droplet*.json

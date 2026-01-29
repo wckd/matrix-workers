@@ -4,7 +4,7 @@
 
 This is a proof of concept Matrix homeserver implementation running entirely on Cloudflare's edge infrastructure. This was built to prove E2EE utilizing Matrix protocols over Element X on the Cloudflare Workers Platform. It is meant to serve as an example prototype and not endorsed as ready for production at this point.
 
-I was assisted by Claude Code Opus 4.5 for this implementation to speed up showing that you could message over Cloudflare Workers utilizing the Element Web and Element X App.  Feel free to submit issues, fork the project to make it your own, or continue to build on this example!
+Feel free to submit issues, fork the project to make it your own, or continue to build on this example!
 
 ## Live Demo
 
@@ -35,6 +35,8 @@ A live instance is running at `m.easydemo.org`. You can verify federation compat
 - **Video Calling**: MatrixRTC with LiveKit and Cloudflare Calls SFU integration
 - **Knock Protocol**: Support for knock-to-join rooms via federation
 - **Room Versions**: Full support for room versions 1-12
+- **Admin Dashboard**: Full-featured web UI with charts, user management, keyboard shortcuts
+- **Synapse API Compatibility**: Standard `/_synapse/admin/*` endpoints for tool compatibility
 
 ## Architecture
 
@@ -90,7 +92,7 @@ A live instance is running at `m.easydemo.org`. You can verify federation compat
 | Directory | Room directory, aliases | ✅ |
 | Discovery | `.well-known/matrix/*` (client, server, support) | ✅ |
 | Reporting | Report events, rooms, users | ✅ |
-| Admin | User session info (`/admin/whois`) | ✅ |
+| Admin | User session info (`/admin/whois`), full admin API | ✅ |
 | 3PID | Email verification, 3PID management | ✅ (Resend) |
 | Timestamps | `timestamp_to_event` for event lookup | ✅ |
 
@@ -155,6 +157,31 @@ The following endpoints were added to achieve full Matrix Specification v1.17 co
 | | `POST /_matrix/client/v3/account/3pid/add` | Add verified 3PID to account |
 | **Federation** | `PUT /_matrix/federation/v1/exchange_third_party_invite/{roomId}` | Third-party invite exchange |
 | **Sync Filters** | Filter loading and application | Filters are now applied during sync |
+
+## Admin Dashboard
+
+Access the admin dashboard at `/admin` on your server (e.g., `https://m.easydemo.org/admin`).
+
+**Features:**
+- **Dashboard** - Server stats, activity charts, user breakdown visualization
+- **User Management** - Create, deactivate, purge users; reset passwords; bulk operations
+- **Room Management** - View rooms, members, state; delete rooms; browse events
+- **Media Management** - View uploads, quarantine/delete media
+- **Reports** - Review and resolve content reports
+- **Federation** - Monitor federation status with other servers
+- **Identity Providers** - Configure OIDC/OAuth providers (Google, etc.)
+- **Settings** - Toggle registration, send server notices
+
+**Keyboard Shortcuts:**
+- `Cmd/Ctrl+K` - Command palette
+- `g h` - Go to Dashboard
+- `g u` - Go to Users
+- `g r` - Go to Rooms
+- `/` - Focus search
+- `?` - Show shortcuts help
+
+**Synapse API Compatibility:**
+Standard `/_synapse/admin/*` endpoints are available for compatibility with existing Matrix admin tools.
 
 ## Quick Start
 

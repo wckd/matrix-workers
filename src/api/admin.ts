@@ -63,6 +63,72 @@ app.get('/admin/api/stats', requireAuth(), requireAdmin, async (c) => {
   });
 });
 
+// GET /admin/api/stats/history - Time-series statistics for dashboard charts
+app.get('/admin/api/stats/history', requireAuth(), requireAdmin, async (c) => {
+  const db = c.env.DB;
+  const period = c.req.query('period') || '7d';
+
+  // Parse period and calculate date range
+  let days: number;
+  if (period === '30d') {
+    days = 30;
+  } else {
+    days = 7; // Default to 7d
+  }
+
+  const now = Date.now();
+  const startTime = now - days * 24 * 60 * 60 * 1000;
+
+  // Generate array of dates for the period (to fill in gaps with zeros)
+  const dateKeys: string[] = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const date = new Date(now - i * 24 * 60 * 60 * 1000);
+    dateKeys.push(date.toISOString().split('T')[0]); // YYYY-MM-DD format
+  }
+
+  // Query events grouped by day
+  // D1/SQLite: divide by 86400000 (ms per day) to get day buckets
+  const eventsQuery = await db.prepare(`
+    SELECT DATE(origin_server_ts / 1000, 'unixepoch') as date, COUNT(*) as count
+    FROM events
+    WHERE origin_server_ts >= ?
+    GROUP BY DATE(origin_server_ts / 1000, 'unixepoch')
+    ORDER BY date
+  `).bind(startTime).all<{ date: string; count: number }>();
+
+  // Query user registrations grouped by day
+  const registrationsQuery = await db.prepare(`
+    SELECT DATE(created_at / 1000, 'unixepoch') as date, COUNT(*) as count
+    FROM users
+    WHERE created_at >= ?
+    GROUP BY DATE(created_at / 1000, 'unixepoch')
+    ORDER BY date
+  `).bind(startTime).all<{ date: string; count: number }>();
+
+  // Convert query results to maps for easy lookup
+  const eventsMap = new Map<string, number>();
+  for (const row of eventsQuery.results) {
+    eventsMap.set(row.date, row.count);
+  }
+
+  const registrationsMap = new Map<string, number>();
+  for (const row of registrationsQuery.results) {
+    registrationsMap.set(row.date, row.count);
+  }
+
+  // Build the response data array, filling in zeros for missing dates
+  const data = dateKeys.map(date => ({
+    date,
+    events: eventsMap.get(date) || 0,
+    registrations: registrationsMap.get(date) || 0,
+  }));
+
+  return c.json({
+    period: period === '30d' ? '30d' : '7d',
+    data,
+  });
+});
+
 // GET /admin/api/users - List all users
 app.get('/admin/api/users', requireAuth(), requireAdmin, async (c) => {
   const db = c.env.DB;
@@ -499,25 +565,69 @@ app.delete('/admin/api/users/:userId/purge', requireAuth(), requireAdmin, async 
     return Errors.forbidden('Cannot delete your own account').toResponse();
   }
 
-  // Delete all user data in order (foreign key constraints)
+  // Get devices BEFORE deleting them (for KV cleanup)
+  const devices = await db.prepare('SELECT device_id FROM devices WHERE user_id = ?').bind(userId).all<{ device_id: string }>();
+
+  // Get and delete media BEFORE deleting user (FK constraint without CASCADE)
+  const media = await db.prepare('SELECT media_id FROM media WHERE user_id = ?').bind(userId).all<{ media_id: string }>();
+  for (const m of media.results) {
+    // Delete from R2
+    await c.env.MEDIA.delete(m.media_id);
+    // Delete thumbnails
+    const thumbs = await db.prepare('SELECT width, height, method FROM thumbnails WHERE media_id = ?').bind(m.media_id).all<{ width: number; height: number; method: string }>();
+    for (const t of thumbs.results) {
+      await c.env.MEDIA.delete(`thumb_${m.media_id}_${t.width}x${t.height}_${t.method}`);
+    }
+  }
+  await db.prepare('DELETE FROM thumbnails WHERE media_id IN (SELECT media_id FROM media WHERE user_id = ?)').bind(userId).run();
+  await db.prepare('DELETE FROM media WHERE user_id = ?').bind(userId).run();
+
+  // Delete all user data in order (respecting foreign key constraints)
+  // Account & profile data
   await db.prepare('DELETE FROM account_data WHERE user_id = ?').bind(userId).run();
   await db.prepare('DELETE FROM account_data_changes WHERE user_id = ?').bind(userId).run();
+  await db.prepare('DELETE FROM presence WHERE user_id = ?').bind(userId).run();
+  await db.prepare('DELETE FROM push_rules WHERE user_id = ?').bind(userId).run();
+  await db.prepare('DELETE FROM sync_tokens WHERE user_id = ?').bind(userId).run();
+  
+  // E2EE & device keys
   await db.prepare('DELETE FROM cross_signing_keys WHERE user_id = ?').bind(userId).run();
   await db.prepare('DELETE FROM cross_signing_signatures WHERE user_id = ? OR signer_user_id = ?').bind(userId, userId).run();
   await db.prepare('DELETE FROM one_time_keys WHERE user_id = ?').bind(userId).run();
   await db.prepare('DELETE FROM fallback_keys WHERE user_id = ?').bind(userId).run();
   await db.prepare('DELETE FROM device_key_changes WHERE user_id = ?').bind(userId).run();
+  await db.prepare('DELETE FROM key_backup_keys WHERE user_id = ?').bind(userId).run();
+  await db.prepare('DELETE FROM key_backup_versions WHERE user_id = ?').bind(userId).run();
+  
+  // Messaging
   await db.prepare('DELETE FROM to_device_messages WHERE recipient_user_id = ? OR sender_user_id = ?').bind(userId, userId).run();
+  await db.prepare('DELETE FROM pushers WHERE user_id = ?').bind(userId).run();
+  await db.prepare('DELETE FROM notification_queue WHERE user_id = ?').bind(userId).run();
+  await db.prepare('DELETE FROM transaction_ids WHERE user_id = ?').bind(userId).run();
+  
+  // Room participation
+  await db.prepare('DELETE FROM receipts WHERE user_id = ?').bind(userId).run();
+  await db.prepare('DELETE FROM typing WHERE user_id = ?').bind(userId).run();
+  await db.prepare('DELETE FROM room_memberships WHERE user_id = ?').bind(userId).run();
+  
+  // Identity & auth
+  await db.prepare('DELETE FROM user_threepids WHERE user_id = ?').bind(userId).run();
+  await db.prepare('DELETE FROM idp_user_links WHERE user_id = ?').bind(userId).run();
   await db.prepare('DELETE FROM access_tokens WHERE user_id = ?').bind(userId).run();
   await db.prepare('DELETE FROM devices WHERE user_id = ?').bind(userId).run();
-  await db.prepare('DELETE FROM room_memberships WHERE user_id = ?').bind(userId).run();
+  
+  // Finally delete the user
   await db.prepare('DELETE FROM users WHERE user_id = ?').bind(userId).run();
 
   // Delete device keys from KV
-  const devices = await db.prepare('SELECT device_id FROM devices WHERE user_id = ?').bind(userId).all<{ device_id: string }>();
   for (const device of devices.results) {
     await c.env.DEVICE_KEYS.delete(`device:${userId}:${device.device_id}`);
   }
+
+  // Clean up any other KV data
+  await c.env.CROSS_SIGNING_KEYS.delete(`master:${userId}`);
+  await c.env.CROSS_SIGNING_KEYS.delete(`self_signing:${userId}`);
+  await c.env.CROSS_SIGNING_KEYS.delete(`user_signing:${userId}`);
 
   // Invalidate stats cache
   await invalidateStatsCache(c.env);
@@ -561,18 +671,65 @@ app.post('/admin/api/users/bulk-delete', requireAuth(), requireAdmin, async (c) 
   // Delete all user data for each user
   let deleted = 0;
   for (const userId of user_ids) {
+    // Get devices BEFORE deleting (for KV cleanup)
+    const devices = await db.prepare('SELECT device_id FROM devices WHERE user_id = ?').bind(userId).all<{ device_id: string }>();
+    
+    // Delete media BEFORE user (FK constraint without CASCADE)
+    const media = await db.prepare('SELECT media_id FROM media WHERE user_id = ?').bind(userId).all<{ media_id: string }>();
+    for (const m of media.results) {
+      await c.env.MEDIA.delete(m.media_id);
+      const thumbs = await db.prepare('SELECT width, height, method FROM thumbnails WHERE media_id = ?').bind(m.media_id).all<{ width: number; height: number; method: string }>();
+      for (const t of thumbs.results) {
+        await c.env.MEDIA.delete(`thumb_${m.media_id}_${t.width}x${t.height}_${t.method}`);
+      }
+    }
+    await db.prepare('DELETE FROM thumbnails WHERE media_id IN (SELECT media_id FROM media WHERE user_id = ?)').bind(userId).run();
+    await db.prepare('DELETE FROM media WHERE user_id = ?').bind(userId).run();
+    
+    // Account & profile data
     await db.prepare('DELETE FROM account_data WHERE user_id = ?').bind(userId).run();
     await db.prepare('DELETE FROM account_data_changes WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM presence WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM push_rules WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM sync_tokens WHERE user_id = ?').bind(userId).run();
+    
+    // E2EE & device keys
     await db.prepare('DELETE FROM cross_signing_keys WHERE user_id = ?').bind(userId).run();
     await db.prepare('DELETE FROM cross_signing_signatures WHERE user_id = ? OR signer_user_id = ?').bind(userId, userId).run();
     await db.prepare('DELETE FROM one_time_keys WHERE user_id = ?').bind(userId).run();
     await db.prepare('DELETE FROM fallback_keys WHERE user_id = ?').bind(userId).run();
     await db.prepare('DELETE FROM device_key_changes WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM key_backup_keys WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM key_backup_versions WHERE user_id = ?').bind(userId).run();
+    
+    // Messaging
     await db.prepare('DELETE FROM to_device_messages WHERE recipient_user_id = ? OR sender_user_id = ?').bind(userId, userId).run();
+    await db.prepare('DELETE FROM pushers WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM notification_queue WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM transaction_ids WHERE user_id = ?').bind(userId).run();
+    
+    // Room participation
+    await db.prepare('DELETE FROM receipts WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM typing WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM room_memberships WHERE user_id = ?').bind(userId).run();
+    
+    // Identity & auth
+    await db.prepare('DELETE FROM user_threepids WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM idp_user_links WHERE user_id = ?').bind(userId).run();
     await db.prepare('DELETE FROM access_tokens WHERE user_id = ?').bind(userId).run();
     await db.prepare('DELETE FROM devices WHERE user_id = ?').bind(userId).run();
-    await db.prepare('DELETE FROM room_memberships WHERE user_id = ?').bind(userId).run();
+    
+    // Finally delete the user
     await db.prepare('DELETE FROM users WHERE user_id = ?').bind(userId).run();
+
+    // Clean up KV data
+    for (const device of devices.results) {
+      await c.env.DEVICE_KEYS.delete(`device:${userId}:${device.device_id}`);
+    }
+    await c.env.CROSS_SIGNING_KEYS.delete(`master:${userId}`);
+    await c.env.CROSS_SIGNING_KEYS.delete(`self_signing:${userId}`);
+    await c.env.CROSS_SIGNING_KEYS.delete(`user_signing:${userId}`);
+    
     deleted++;
   }
 
@@ -592,32 +749,86 @@ app.post('/admin/api/cleanup', requireAuth(), requireAdmin, async (c) => {
   `).all<{ user_id: string }>();
   const userIds = users.results.map(u => u.user_id);
 
-  // Delete user-related data
+  // Get all devices for KV cleanup
+  const allDevices = await db.prepare(`
+    SELECT user_id, device_id FROM devices WHERE user_id IN (SELECT user_id FROM users WHERE admin = 0)
+  `).all<{ user_id: string; device_id: string }>();
+
+  // Delete user-related data for each non-admin user
   for (const userId of userIds) {
+    // Account & profile data
     await db.prepare('DELETE FROM account_data WHERE user_id = ?').bind(userId).run();
     await db.prepare('DELETE FROM account_data_changes WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM presence WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM push_rules WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM sync_tokens WHERE user_id = ?').bind(userId).run();
+    
+    // E2EE & device keys
     await db.prepare('DELETE FROM cross_signing_keys WHERE user_id = ?').bind(userId).run();
     await db.prepare('DELETE FROM cross_signing_signatures WHERE user_id = ? OR signer_user_id = ?').bind(userId, userId).run();
     await db.prepare('DELETE FROM one_time_keys WHERE user_id = ?').bind(userId).run();
     await db.prepare('DELETE FROM fallback_keys WHERE user_id = ?').bind(userId).run();
     await db.prepare('DELETE FROM device_key_changes WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM key_backup_keys WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM key_backup_versions WHERE user_id = ?').bind(userId).run();
+    
+    // Messaging
     await db.prepare('DELETE FROM to_device_messages WHERE recipient_user_id = ? OR sender_user_id = ?').bind(userId, userId).run();
+    await db.prepare('DELETE FROM pushers WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM notification_queue WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM transaction_ids WHERE user_id = ?').bind(userId).run();
+    
+    // Room participation
+    await db.prepare('DELETE FROM receipts WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM typing WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM room_memberships WHERE user_id = ?').bind(userId).run();
+    
+    // Identity & auth
+    await db.prepare('DELETE FROM user_threepids WHERE user_id = ?').bind(userId).run();
+    await db.prepare('DELETE FROM idp_user_links WHERE user_id = ?').bind(userId).run();
     await db.prepare('DELETE FROM access_tokens WHERE user_id = ?').bind(userId).run();
     await db.prepare('DELETE FROM devices WHERE user_id = ?').bind(userId).run();
-    await db.prepare('DELETE FROM room_memberships WHERE user_id = ?').bind(userId).run();
+    
+    // Finally delete the user
     await db.prepare('DELETE FROM users WHERE user_id = ?').bind(userId).run();
+
+    // Clean up KV cross-signing keys
+    await c.env.CROSS_SIGNING_KEYS.delete(`master:${userId}`);
+    await c.env.CROSS_SIGNING_KEYS.delete(`self_signing:${userId}`);
+    await c.env.CROSS_SIGNING_KEYS.delete(`user_signing:${userId}`);
   }
 
-  // Delete all rooms and events
+  // Clean up device keys from KV
+  for (const device of allDevices.results) {
+    await c.env.DEVICE_KEYS.delete(`device:${device.user_id}:${device.device_id}`);
+  }
+
+  // Delete all rooms, events, and related data
+  await db.prepare('DELETE FROM event_relations').run();
   await db.prepare('DELETE FROM room_state').run();
   await db.prepare('DELETE FROM room_aliases').run();
+  await db.prepare('DELETE FROM room_knocks').run();
+  await db.prepare('DELETE FROM content_reports').run();
   await db.prepare('DELETE FROM events').run();
   await db.prepare('DELETE FROM rooms').run();
+
+  // Clean up media (delete from R2 and database)
+  const media = await db.prepare('SELECT media_id FROM media').all<{ media_id: string }>();
+  for (const m of media.results) {
+    await c.env.MEDIA.delete(m.media_id);
+  }
+  await db.prepare('DELETE FROM thumbnails').run();
+  await db.prepare('DELETE FROM media').run();
 
   // Invalidate stats cache
   await invalidateStatsCache(c.env);
 
-  return c.json({ success: true, users_deleted: userIds.length });
+  return c.json({ 
+    success: true, 
+    users_deleted: userIds.length,
+    rooms_deleted: true,
+    media_deleted: media.results.length
+  });
 });
 
 // POST /admin/api/users/:userId/reactivate - Reactivate a deactivated user
@@ -1388,6 +1599,523 @@ app.get('/_matrix/client/v3/admin/whois/:userId', requireAuth(), async (c) => {
     user_id: targetUserId,
     devices: devicesMap,
   });
+});
+
+// ============================================
+// Synapse-Compatible Admin API Routes
+// These routes provide compatibility with Synapse admin tools
+// ============================================
+
+// GET /_synapse/admin/v1/server_version - Server version info (Synapse format)
+app.get('/_synapse/admin/v1/server_version', requireAuth(), requireAdmin, async (c) => {
+  return c.json({
+    server_version: c.env.SERVER_VERSION,
+    python_version: 'N/A (Cloudflare Workers)',
+  });
+});
+
+// GET /_synapse/admin/v2/users - List users (Synapse format)
+app.get('/_synapse/admin/v2/users', requireAuth(), requireAdmin, async (c) => {
+  const db = c.env.DB;
+  const limit = Math.min(parseInt(c.req.query('limit') || '100'), 1000);
+  const from = parseInt(c.req.query('from') || '0');
+  const guests = c.req.query('guests') !== 'false';
+  const deactivated = c.req.query('deactivated') === 'true';
+  const name = c.req.query('name'); // Search by name
+
+  let query = `
+    SELECT user_id as name, display_name as displayname, is_guest, is_deactivated as deactivated, admin, created_at as creation_ts
+    FROM users WHERE 1=1
+  `;
+  const params: any[] = [];
+
+  if (!guests) {
+    query += ' AND is_guest = 0';
+  }
+  if (deactivated) {
+    query += ' AND is_deactivated = 1';
+  }
+  if (name) {
+    query += ' AND (localpart LIKE ? OR display_name LIKE ?)';
+    params.push(`%${name}%`, `%${name}%`);
+  }
+
+  query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+  params.push(limit, from);
+
+  const users = await db.prepare(query).bind(...params).all();
+  const total = await db.prepare('SELECT COUNT(*) as count FROM users').first<{ count: number }>();
+
+  return c.json({
+    users: users.results,
+    next_token: from + limit < (total?.count || 0) ? String(from + limit) : undefined,
+    total: total?.count || 0,
+  });
+});
+
+// GET /_synapse/admin/v2/users/:userId - User details (Synapse format)
+app.get('/_synapse/admin/v2/users/:userId', requireAuth(), requireAdmin, async (c) => {
+  const userId = decodeURIComponent(c.req.param('userId'));
+  const db = c.env.DB;
+
+  const user = await db.prepare(`
+    SELECT user_id as name, display_name as displayname, avatar_url, is_guest, is_deactivated as deactivated, admin, created_at as creation_ts
+    FROM users WHERE user_id = ?
+  `).bind(userId).first();
+
+  if (!user) {
+    return Errors.notFound('User not found').toResponse();
+  }
+
+  // Get user's threepids (email addresses, phone numbers)
+  // Note: We may not have a full threepid table, returning empty for now
+  const threepids: any[] = [];
+
+  return c.json({
+    ...user,
+    threepids,
+    consent_version: null,
+    consent_server_notice_sent: null,
+    appservice_id: null,
+    consent_ts: null,
+    user_type: null,
+    is_shadow_banned: false,
+    locked: false,
+  });
+});
+
+// POST /_synapse/admin/v1/deactivate/:userId - Deactivate user (Synapse format)
+app.post('/_synapse/admin/v1/deactivate/:userId', requireAuth(), requireAdmin, async (c) => {
+  const userId = decodeURIComponent(c.req.param('userId'));
+  const db = c.env.DB;
+
+  // Check user exists
+  const user = await db.prepare('SELECT user_id FROM users WHERE user_id = ?').bind(userId).first();
+  if (!user) {
+    return Errors.notFound('User not found').toResponse();
+  }
+
+  // Deactivate user
+  await db.prepare('UPDATE users SET is_deactivated = 1, updated_at = ? WHERE user_id = ?')
+    .bind(Date.now(), userId).run();
+
+  // Revoke all access tokens
+  await db.prepare('DELETE FROM access_tokens WHERE user_id = ?').bind(userId).run();
+
+  // Invalidate stats cache
+  await invalidateStatsCache(c.env);
+
+  return c.json({ id_server_unbind_result: 'success' });
+});
+
+// POST /_synapse/admin/v1/reset_password/:userId - Reset password (Synapse format)
+app.post('/_synapse/admin/v1/reset_password/:userId', requireAuth(), requireAdmin, async (c) => {
+  const userId = decodeURIComponent(c.req.param('userId'));
+  const db = c.env.DB;
+
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return Errors.badJson().toResponse();
+  }
+
+  const { new_password, logout_devices } = body;
+  if (!new_password) {
+    return Errors.missingParam('new_password').toResponse();
+  }
+
+  // Check user exists
+  const user = await db.prepare('SELECT user_id FROM users WHERE user_id = ?').bind(userId).first();
+  if (!user) {
+    return Errors.notFound('User not found').toResponse();
+  }
+
+  // Hash and update password
+  const { hashPassword } = await import('../utils/crypto');
+  const passwordHash = await hashPassword(new_password);
+
+  await db.prepare(
+    'UPDATE users SET password_hash = ?, updated_at = ? WHERE user_id = ?'
+  ).bind(passwordHash, Date.now(), userId).run();
+
+  // Optionally revoke all access tokens (default: true per Synapse behavior)
+  if (logout_devices !== false) {
+    await db.prepare('DELETE FROM access_tokens WHERE user_id = ?').bind(userId).run();
+  }
+
+  return c.json({});
+});
+
+// GET /_synapse/admin/v1/rooms - List rooms (Synapse format)
+app.get('/_synapse/admin/v1/rooms', requireAuth(), requireAdmin, async (c) => {
+  const db = c.env.DB;
+  const limit = Math.min(parseInt(c.req.query('limit') || '100'), 1000);
+  const from = parseInt(c.req.query('from') || '0');
+  const orderBy = c.req.query('order_by') || 'name';
+  const dir = c.req.query('dir') === 'b' ? 'DESC' : 'ASC';
+  const searchTerm = c.req.query('search_term');
+
+  // Build query
+  let query = `
+    SELECT r.room_id, r.room_version, r.is_public as public, r.creator_id as creator, r.created_at,
+           (SELECT COUNT(*) FROM room_memberships WHERE room_id = r.room_id AND membership = 'join') as joined_members,
+           (SELECT COUNT(*) FROM room_memberships WHERE room_id = r.room_id) as joined_local_members,
+           (SELECT COUNT(*) FROM events WHERE room_id = r.room_id) as state_events
+    FROM rooms r
+  `;
+  const params: any[] = [];
+
+  if (searchTerm) {
+    query += ` WHERE r.room_id LIKE ?`;
+    params.push(`%${searchTerm}%`);
+  }
+
+  // Order by (simplified)
+  const orderColumn = orderBy === 'joined_members' ? 'joined_members' : 'r.created_at';
+  query += ` ORDER BY ${orderColumn} ${dir} LIMIT ? OFFSET ?`;
+  params.push(limit, from);
+
+  const rooms = await db.prepare(query).bind(...params).all();
+
+  // Get room names and other metadata
+  const roomsWithDetails = await Promise.all(rooms.results.map(async (room: any) => {
+    const nameEvent = await db.prepare(`
+      SELECT e.content FROM room_state rs
+      JOIN events e ON rs.event_id = e.event_id
+      WHERE rs.room_id = ? AND rs.event_type = 'm.room.name'
+    `).bind(room.room_id).first<{ content: string }>();
+
+    const canonicalAliasEvent = await db.prepare(`
+      SELECT e.content FROM room_state rs
+      JOIN events e ON rs.event_id = e.event_id
+      WHERE rs.room_id = ? AND rs.event_type = 'm.room.canonical_alias'
+    `).bind(room.room_id).first<{ content: string }>();
+
+    const topicEvent = await db.prepare(`
+      SELECT e.content FROM room_state rs
+      JOIN events e ON rs.event_id = e.event_id
+      WHERE rs.room_id = ? AND rs.event_type = 'm.room.topic'
+    `).bind(room.room_id).first<{ content: string }>();
+
+    const avatarEvent = await db.prepare(`
+      SELECT e.content FROM room_state rs
+      JOIN events e ON rs.event_id = e.event_id
+      WHERE rs.room_id = ? AND rs.event_type = 'm.room.avatar'
+    `).bind(room.room_id).first<{ content: string }>();
+
+    return {
+      room_id: room.room_id,
+      name: nameEvent ? JSON.parse(nameEvent.content).name : null,
+      canonical_alias: canonicalAliasEvent ? JSON.parse(canonicalAliasEvent.content).alias : null,
+      topic: topicEvent ? JSON.parse(topicEvent.content).topic : null,
+      avatar: avatarEvent ? JSON.parse(avatarEvent.content).url : null,
+      joined_members: room.joined_members || 0,
+      joined_local_members: room.joined_local_members || 0,
+      version: room.room_version,
+      creator: room.creator,
+      encryption: null, // Would need to check m.room.encryption state
+      federatable: true,
+      public: Boolean(room.public),
+      join_rules: null, // Would need to check m.room.join_rules state
+      guest_access: null, // Would need to check m.room.guest_access state
+      history_visibility: null, // Would need to check m.room.history_visibility state
+      state_events: room.state_events || 0,
+    };
+  }));
+
+  const total = await db.prepare('SELECT COUNT(*) as count FROM rooms').first<{ count: number }>();
+
+  return c.json({
+    rooms: roomsWithDetails,
+    offset: from,
+    total_rooms: total?.count || 0,
+    next_batch: from + limit < (total?.count || 0) ? from + limit : undefined,
+    prev_batch: from > 0 ? Math.max(0, from - limit) : undefined,
+  });
+});
+
+// GET /_synapse/admin/v1/rooms/:roomId - Room details (Synapse format)
+app.get('/_synapse/admin/v1/rooms/:roomId', requireAuth(), requireAdmin, async (c) => {
+  const roomId = decodeURIComponent(c.req.param('roomId'));
+  const db = c.env.DB;
+
+  const room = await db.prepare(`
+    SELECT room_id, room_version, is_public, creator_id, created_at
+    FROM rooms WHERE room_id = ?
+  `).bind(roomId).first();
+
+  if (!room) {
+    return Errors.notFound('Room not found').toResponse();
+  }
+
+  // Get room state
+  const nameEvent = await db.prepare(`
+    SELECT e.content FROM room_state rs
+    JOIN events e ON rs.event_id = e.event_id
+    WHERE rs.room_id = ? AND rs.event_type = 'm.room.name'
+  `).bind(roomId).first<{ content: string }>();
+
+  const topicEvent = await db.prepare(`
+    SELECT e.content FROM room_state rs
+    JOIN events e ON rs.event_id = e.event_id
+    WHERE rs.room_id = ? AND rs.event_type = 'm.room.topic'
+  `).bind(roomId).first<{ content: string }>();
+
+  const canonicalAliasEvent = await db.prepare(`
+    SELECT e.content FROM room_state rs
+    JOIN events e ON rs.event_id = e.event_id
+    WHERE rs.room_id = ? AND rs.event_type = 'm.room.canonical_alias'
+  `).bind(roomId).first<{ content: string }>();
+
+  const avatarEvent = await db.prepare(`
+    SELECT e.content FROM room_state rs
+    JOIN events e ON rs.event_id = e.event_id
+    WHERE rs.room_id = ? AND rs.event_type = 'm.room.avatar'
+  `).bind(roomId).first<{ content: string }>();
+
+  const joinRulesEvent = await db.prepare(`
+    SELECT e.content FROM room_state rs
+    JOIN events e ON rs.event_id = e.event_id
+    WHERE rs.room_id = ? AND rs.event_type = 'm.room.join_rules'
+  `).bind(roomId).first<{ content: string }>();
+
+  // Get member count
+  const memberCount = await db.prepare(`
+    SELECT COUNT(*) as count FROM room_memberships WHERE room_id = ? AND membership = 'join'
+  `).bind(roomId).first<{ count: number }>();
+
+  // Get state event count
+  const stateCount = await db.prepare(`
+    SELECT COUNT(*) as count FROM room_state WHERE room_id = ?
+  `).bind(roomId).first<{ count: number }>();
+
+  return c.json({
+    room_id: roomId,
+    name: nameEvent ? JSON.parse(nameEvent.content).name : null,
+    topic: topicEvent ? JSON.parse(topicEvent.content).topic : null,
+    canonical_alias: canonicalAliasEvent ? JSON.parse(canonicalAliasEvent.content).alias : null,
+    avatar: avatarEvent ? JSON.parse(avatarEvent.content).url : null,
+    joined_members: memberCount?.count || 0,
+    joined_local_members: memberCount?.count || 0,
+    version: (room as any).room_version,
+    creator: (room as any).creator_id,
+    public: Boolean((room as any).is_public),
+    join_rules: joinRulesEvent ? JSON.parse(joinRulesEvent.content).join_rule : null,
+    state_events: stateCount?.count || 0,
+    federatable: true,
+  });
+});
+
+// GET /_synapse/admin/v1/federation/destinations - Federation destinations (Synapse format)
+app.get('/_synapse/admin/v1/federation/destinations', requireAuth(), requireAdmin, async (c) => {
+  const db = c.env.DB;
+  const limit = Math.min(parseInt(c.req.query('limit') || '100'), 1000);
+  const from = parseInt(c.req.query('from') || '0');
+
+  const servers = await db.prepare(`
+    SELECT server_name as destination, valid_until_ts, last_successful_fetch as last_successful_stream_ordering,
+           retry_count as failure_ts, retry_count
+    FROM servers
+    ORDER BY last_successful_fetch DESC
+    LIMIT ? OFFSET ?
+  `).bind(limit, from).all();
+
+  const total = await db.prepare('SELECT COUNT(*) as count FROM servers').first<{ count: number }>();
+
+  return c.json({
+    destinations: servers.results.map((s: any) => ({
+      destination: s.destination,
+      retry_last_ts: s.failure_ts ? Date.now() - 60000 * s.retry_count : 0,
+      retry_interval: s.retry_count * 60000,
+      failure_ts: s.failure_ts > 0 ? Date.now() - 60000 * s.retry_count : null,
+      last_successful_stream_ordering: s.last_successful_stream_ordering,
+    })),
+    total: total?.count || 0,
+    next_token: from + limit < (total?.count || 0) ? String(from + limit) : undefined,
+  });
+});
+
+// GET /_synapse/admin/v1/event_reports - Event reports (Synapse format)
+app.get('/_synapse/admin/v1/event_reports', requireAuth(), requireAdmin, async (c) => {
+  const db = c.env.DB;
+  const limit = Math.min(parseInt(c.req.query('limit') || '100'), 1000);
+  const from = parseInt(c.req.query('from') || '0');
+  const dir = c.req.query('dir') === 'f' ? 'ASC' : 'DESC';
+  const roomId = c.req.query('room_id');
+  const userId = c.req.query('user_id');
+
+  let query = `
+    SELECT cr.id, cr.reporter_user_id as user_id, cr.room_id, cr.event_id,
+           cr.reason, cr.score, cr.created_at as received_ts,
+           e.sender as sender, e.content
+    FROM content_reports cr
+    LEFT JOIN events e ON cr.event_id = e.event_id
+    WHERE 1=1
+  `;
+  const params: any[] = [];
+
+  if (roomId) {
+    query += ' AND cr.room_id = ?';
+    params.push(roomId);
+  }
+  if (userId) {
+    query += ' AND cr.reporter_user_id = ?';
+    params.push(userId);
+  }
+
+  query += ` ORDER BY cr.created_at ${dir} LIMIT ? OFFSET ?`;
+  params.push(limit, from);
+
+  const reports = await db.prepare(query).bind(...params).all();
+
+  const total = await db.prepare('SELECT COUNT(*) as count FROM content_reports').first<{ count: number }>();
+
+  return c.json({
+    event_reports: reports.results.map((r: any) => ({
+      id: r.id,
+      received_ts: r.received_ts,
+      room_id: r.room_id,
+      user_id: r.user_id,
+      reason: r.reason,
+      score: r.score,
+      sender: r.sender,
+      event_id: r.event_id,
+      event_json: r.content ? { content: JSON.parse(r.content) } : null,
+    })),
+    total: total?.count || 0,
+    next_token: from + limit < (total?.count || 0) ? String(from + limit) : undefined,
+  });
+});
+
+// DELETE /_synapse/admin/v1/rooms/:roomId - Delete room (Synapse format)
+app.delete('/_synapse/admin/v1/rooms/:roomId', requireAuth(), requireAdmin, async (c) => {
+  const roomId = decodeURIComponent(c.req.param('roomId'));
+  const db = c.env.DB;
+
+  // Check room exists
+  const room = await db.prepare('SELECT room_id FROM rooms WHERE room_id = ?').bind(roomId).first();
+  if (!room) {
+    return Errors.notFound('Room not found').toResponse();
+  }
+
+  // Delete in order (foreign key constraints)
+  await db.prepare('DELETE FROM room_aliases WHERE room_id = ?').bind(roomId).run();
+  await db.prepare('DELETE FROM room_memberships WHERE room_id = ?').bind(roomId).run();
+  await db.prepare('DELETE FROM room_state WHERE room_id = ?').bind(roomId).run();
+  await db.prepare('DELETE FROM events WHERE room_id = ?').bind(roomId).run();
+  await db.prepare('DELETE FROM rooms WHERE room_id = ?').bind(roomId).run();
+
+  // Invalidate stats cache
+  await invalidateStatsCache(c.env);
+
+  return c.json({
+    kicked_users: [],
+    failed_to_kick_users: [],
+    local_aliases: [],
+    new_room_id: null,
+  });
+});
+
+// PUT /_synapse/admin/v2/users/:userId - Create or modify user (Synapse format)
+app.put('/_synapse/admin/v2/users/:userId', requireAuth(), requireAdmin, async (c) => {
+  const userId = decodeURIComponent(c.req.param('userId'));
+  const db = c.env.DB;
+
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return Errors.badJson().toResponse();
+  }
+
+  const { password, displayname, admin, deactivated, avatar_url } = body;
+
+  // Check if user exists
+  const existingUser = await db.prepare('SELECT user_id FROM users WHERE user_id = ?').bind(userId).first();
+
+  if (existingUser) {
+    // Update existing user
+    const updates: string[] = [];
+    const params: any[] = [];
+
+    if (displayname !== undefined) {
+      updates.push('display_name = ?');
+      params.push(displayname);
+    }
+    if (admin !== undefined) {
+      updates.push('admin = ?');
+      params.push(admin ? 1 : 0);
+    }
+    if (deactivated !== undefined) {
+      updates.push('is_deactivated = ?');
+      params.push(deactivated ? 1 : 0);
+    }
+    if (avatar_url !== undefined) {
+      updates.push('avatar_url = ?');
+      params.push(avatar_url);
+    }
+    if (password !== undefined) {
+      const { hashPassword } = await import('../utils/crypto');
+      const passwordHash = await hashPassword(password);
+      updates.push('password_hash = ?');
+      params.push(passwordHash);
+    }
+
+    if (updates.length > 0) {
+      updates.push('updated_at = ?');
+      params.push(Date.now());
+      params.push(userId);
+
+      await db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE user_id = ?`).bind(...params).run();
+    }
+
+    return c.json({
+      name: userId,
+      displayname,
+      admin: admin !== undefined ? admin : null,
+      deactivated: deactivated !== undefined ? deactivated : null,
+    });
+  } else {
+    // Create new user
+    if (!password) {
+      return Errors.missingParam('password required for new user').toResponse();
+    }
+
+    // Extract localpart from user_id
+    const match = userId.match(/^@([^:]+):/);
+    if (!match) {
+      return c.json({ errcode: 'M_INVALID_USERNAME', error: 'Invalid user ID format' }, 400);
+    }
+    const localpart = match[1];
+
+    const { hashPassword } = await import('../utils/crypto');
+    const passwordHash = await hashPassword(password);
+
+    await db.prepare(`
+      INSERT INTO users (user_id, localpart, password_hash, display_name, avatar_url, admin, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      userId,
+      localpart,
+      passwordHash,
+      displayname || null,
+      avatar_url || null,
+      admin ? 1 : 0,
+      Date.now(),
+      Date.now()
+    ).run();
+
+    // Invalidate stats cache
+    await invalidateStatsCache(c.env);
+
+    return c.json({
+      name: userId,
+      displayname: displayname || null,
+      admin: admin || false,
+      deactivated: false,
+    });
+  }
 });
 
 export default app;
