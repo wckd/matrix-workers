@@ -1532,6 +1532,82 @@ app.post('/admin/api/idp/providers/:id/test', requireAuth(), requireAdmin, async
 });
 
 // ============================================
+// E2EE Key Debug Endpoint (Admin Only)
+// ============================================
+
+// GET /admin/api/users/:userId/keys - Debug E2EE key state for a user
+app.get('/admin/api/users/:userId/keys', requireAuth(), requireAdmin, async (c) => {
+  const userId = decodeURIComponent(c.req.param('userId'));
+  const db = c.env.DB;
+
+  // Get cross-signing keys from D1
+  const crossSigningKeys = await db.prepare(`
+    SELECT key_type, key_id, key_data FROM cross_signing_keys WHERE user_id = ?
+  `).bind(userId).all<{ key_type: string; key_id: string; key_data: string }>();
+
+  // Get signatures from D1
+  const signatures = await db.prepare(`
+    SELECT key_id, signer_user_id, signer_key_id, signature FROM cross_signing_signatures WHERE user_id = ?
+  `).bind(userId).all<{ key_id: string; signer_user_id: string; signer_key_id: string; signature: string }>();
+
+  // Get devices
+  const devices = await db.prepare(`
+    SELECT device_id, display_name FROM devices WHERE user_id = ?
+  `).bind(userId).all<{ device_id: string; display_name: string | null }>();
+
+  // Get device keys from KV
+  const deviceKeys: Record<string, any> = {};
+  for (const device of devices.results) {
+    const keyData = await c.env.DEVICE_KEYS.get(`device:${userId}:${device.device_id}`);
+    if (keyData) {
+      deviceKeys[device.device_id] = JSON.parse(keyData);
+    }
+  }
+
+  // Parse cross-signing keys
+  const parsedCSKeys: Record<string, any> = {};
+  for (const key of crossSigningKeys.results) {
+    parsedCSKeys[key.key_type] = {
+      key_id: key.key_id,
+      data: JSON.parse(key.key_data),
+    };
+  }
+
+  // Verification status check
+  const selfSigningKeyId = parsedCSKeys.self_signing?.key_id;
+  const verificationStatus: Record<string, { verified: boolean; reason: string }> = {};
+  
+  for (const device of devices.results) {
+    const deviceId = device.device_id;
+    const hasSelfSigningSignature = signatures.results.some(
+      s => s.key_id === deviceId && s.signer_key_id === selfSigningKeyId
+    );
+    const deviceKey = deviceKeys[deviceId];
+    const hasSignatureInDeviceKey = deviceKey?.signatures?.[userId]?.[selfSigningKeyId] !== undefined;
+    
+    verificationStatus[deviceId] = {
+      verified: hasSelfSigningSignature && hasSignatureInDeviceKey,
+      reason: !selfSigningKeyId 
+        ? 'No self-signing key' 
+        : !hasSelfSigningSignature 
+          ? 'No signature in DB' 
+          : !hasSignatureInDeviceKey 
+            ? 'Signature not in device key object'
+            : 'Verified',
+    };
+  }
+
+  return c.json({
+    user_id: userId,
+    cross_signing_keys: parsedCSKeys,
+    signatures: signatures.results,
+    devices: devices.results,
+    device_keys: deviceKeys,
+    verification_status: verificationStatus,
+  });
+});
+
+// ============================================
 // Matrix Client-Server Admin API Endpoints
 // ============================================
 

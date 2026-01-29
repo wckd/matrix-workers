@@ -2714,10 +2714,11 @@ export const adminDashboardHtml = (serverName: string) => `
 
     async function viewUser(userId) {
       try {
-        const [userData, sessionsData, whoisData] = await Promise.all([
+        const [userData, sessionsData, whoisData, keysData] = await Promise.all([
           api(\`/admin/api/users/\${encodeURIComponent(userId)}\`),
           api(\`/admin/api/users/\${encodeURIComponent(userId)}/sessions\`),
-          api(\`/_matrix/client/v3/admin/whois/\${encodeURIComponent(userId)}\`).catch(() => ({ devices: {} }))
+          api(\`/_matrix/client/v3/admin/whois/\${encodeURIComponent(userId)}\`).catch(() => ({ devices: {} })),
+          api(\`/admin/api/users/\${encodeURIComponent(userId)}/keys\`).catch(() => ({ verification_status: {}, cross_signing_keys: {} }))
         ]);
 
         document.getElementById('userModalContent').innerHTML = \`
@@ -2785,6 +2786,26 @@ export const adminDashboardHtml = (serverName: string) => `
               </tr>
             \`).join('') || '<tr><td colspan="3" style="text-align: center;">No devices</td></tr>'}
           </table>
+
+          <h4 style="margin: 20px 0 10px;">E2EE Verification Status</h4>
+          <div style="background: var(--bg-elevated); border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+            <div style="margin-bottom: 10px;">
+              <strong>Cross-Signing Keys:</strong> 
+              \${keysData.cross_signing_keys?.master ? '<span class="badge badge-success">Set Up</span>' : '<span class="badge badge-danger">Not Set Up</span>'}
+            </div>
+            \${Object.keys(keysData.verification_status || {}).length > 0 ? 
+              Object.entries(keysData.verification_status).map(([deviceId, status]) => \`
+                <div style="padding: 10px; background: var(--bg-base); border-radius: 6px; margin-bottom: 8px;">
+                  <strong>\${escapeHtml(deviceId)}</strong>
+                  <span style="margin-left: 10px;" class="badge \${status.verified ? 'badge-success' : 'badge-warning'}">
+                    \${status.verified ? 'Verified' : 'Unverified'}
+                  </span>
+                  <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">
+                    \${escapeHtml(status.reason)}
+                  </div>
+                </div>
+              \`).join('') : '<span style="color: var(--text-tertiary);">No devices to verify</span>'}
+          </div>
 
           <h4 style="margin: 20px 0 10px;">Session Information (Whois)</h4>
           <div style="background: var(--bg-elevated); border-radius: 8px; padding: 16px;">

@@ -1,11 +1,36 @@
 // MatrixRTC API endpoints (MSC4143/MSC4195)
 // Provides LiveKit JWT tokens for Element X calls
+// Also implements MSC4143 RTC transports discovery
 
 import { Hono } from 'hono';
 import type { AppEnv } from '../types';
 import { generateLiveKitToken, getLiveKitConfig } from '../services/livekit';
 
 const app = new Hono<AppEnv>();
+
+// GET /_matrix/client/unstable/org.matrix.msc4143/rtc/transports
+// MSC4143: RTC transports discovery - tells clients what real-time communication methods are available
+// Returns empty list to indicate standard WebRTC/TURN should be used (no special transports)
+app.get('/_matrix/client/unstable/org.matrix.msc4143/rtc/transports', (c) => {
+  const config = getLiveKitConfig(c.env);
+  
+  // If LiveKit is configured, advertise it as a transport option
+  if (config) {
+    return c.json({
+      transports: [
+        {
+          type: 'livekit',
+          url: `https://${c.env.SERVER_NAME}/livekit/get_token`,
+        },
+      ],
+    });
+  }
+
+  // No special transports - clients will use standard WebRTC
+  return c.json({
+    transports: [],
+  });
+});
 
 // OpenID token structure from Matrix client
 interface OpenIDToken {

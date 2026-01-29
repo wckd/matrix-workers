@@ -38,6 +38,7 @@ import calls from './api/calls';
 import rtc from './api/rtc';
 // import qrLogin from './api/qr-login'; // QR feature commented out - requires MSC4108/OIDC for Element X
 import oidcAuth from './api/oidc-auth';
+import oauth from './api/oauth';
 import { adminDashboardHtml } from './admin/dashboard';
 import { rateLimitMiddleware } from './middleware/rate-limit';
 import { requireAuth } from './middleware/auth';
@@ -104,6 +105,9 @@ app.route('/', admin);
 
 // OIDC/SSO authentication
 app.route('/', oidcAuth);
+
+// OAuth 2.0 provider endpoints
+app.route('/', oauth);
 
 // Matrix version discovery
 app.route('/', versions);

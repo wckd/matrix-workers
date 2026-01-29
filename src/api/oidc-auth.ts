@@ -442,42 +442,37 @@ Device ID: ${deviceId}\`;
 
 // GET /_matrix/client/v1/auth_metadata - Get authentication metadata
 // Returns information about supported authentication methods (MSC2965 / Matrix v1.17)
+// This is the STABLE endpoint as of Matrix v1.17
 app.get('/_matrix/client/v1/auth_metadata', async (c) => {
-  const db = c.env.DB;
+  const serverName = c.env.SERVER_NAME;
+  const baseUrl = `https://${serverName}`;
 
-  // Check if any OIDC providers are configured and enabled
-  const providers = await db.prepare(`
-    SELECT id, name, issuer_url FROM idp_providers WHERE enabled = 1 LIMIT 1
-  `).all<{ id: string; name: string; issuer_url: string }>();
-
-  const response: Record<string, unknown> = {
-    homeserver: {
-      base_url: `https://${c.env.SERVER_NAME}`,
-    },
+  // Return proper OIDC metadata for this server acting as its own OIDC provider
+  // This is required for Element Web OIDC-native authentication to work
+  // All fields must be present for Element Web to accept the configuration
+  const response = {
+    issuer: baseUrl,
+    authorization_endpoint: `${baseUrl}/oauth/authorize`,
+    token_endpoint: `${baseUrl}/oauth/token`,
+    revocation_endpoint: `${baseUrl}/oauth/revoke`,
+    registration_endpoint: `${baseUrl}/oauth/register`,
+    // Required capabilities
+    response_types_supported: ['code'],
+    grant_types_supported: ['authorization_code', 'refresh_token'],
+    code_challenge_methods_supported: ['S256', 'plain'],
+    // Additional optional fields that Element Web may check
+    token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'none'],
+    scopes_supported: [
+      'openid',
+      'profile',
+      'email',
+      'urn:matrix:org.matrix.msc2967.client:api:*',
+      'urn:matrix:org.matrix.msc2967.client:device:*',
+    ],
+    // Matrix authentication service extension (MSC3861)
+    account_management_uri: `${baseUrl}/admin`,
+    account_management_actions_supported: ['org.matrix.cross_signing_reset'],
   };
-
-  // If OIDC providers are configured, include issuer information
-  if (providers.results.length > 0) {
-    const firstProvider = providers.results[0];
-    try {
-      // Fetch OIDC discovery to get proper endpoints
-      const discovery = await fetchOIDCDiscovery(firstProvider.issuer_url);
-      // Cast through unknown to access optional properties not in our minimal interface
-      const discoveryAny = discovery as unknown as Record<string, unknown>;
-      response.issuer = discovery.issuer;
-      response.authorization_endpoint = discovery.authorization_endpoint;
-      response.token_endpoint = discovery.token_endpoint;
-      if (discoveryAny.registration_endpoint) {
-        response.registration_endpoint = discoveryAny.registration_endpoint;
-      }
-      if (discoveryAny.revocation_endpoint) {
-        response.revocation_endpoint = discoveryAny.revocation_endpoint;
-      }
-    } catch (err) {
-      // If discovery fails, just return homeserver info without OIDC metadata
-      console.error('Failed to fetch OIDC discovery for auth_metadata:', err);
-    }
-  }
 
   return c.json(response);
 });
