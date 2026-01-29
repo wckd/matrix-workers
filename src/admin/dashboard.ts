@@ -2432,7 +2432,11 @@ export const adminDashboardHtml = (serverName: string) => `
         logout();
         throw new Error('Unauthorized');
       }
-      return res.json();
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || data.errcode || \`HTTP \${res.status}\`);
+      }
+      return data;
     }
 
     // Charts
@@ -2765,7 +2769,7 @@ export const adminDashboardHtml = (serverName: string) => `
               <tr>
                 <td style="font-size: 12px;">\${escapeHtml(s.device_id || 'Unknown')}</td>
                 <td>\${formatDate(s.created_at)}</td>
-                <td><button class="action-btn danger" onclick="revokeSession(\${s.id})">Revoke</button></td>
+                <td><button class="action-btn danger" onclick="revokeSession('\${escapeAttr(s.id)}')">Revoke</button></td>
               </tr>
             \`).join('') || '<tr><td colspan="3" style="text-align: center;">No active sessions</td></tr>'}
           </table>
@@ -2813,7 +2817,8 @@ export const adminDashboardHtml = (serverName: string) => `
         \`;
         openModal('userModal');
       } catch (err) {
-        showToast('Failed to load user details', 'error');
+        console.error('Failed to load user details:', err);
+        showToast('Failed to load user details: ' + (err.message || err), 'error');
       }
     }
 

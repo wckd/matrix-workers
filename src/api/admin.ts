@@ -901,7 +901,7 @@ app.get('/admin/api/users/:userId/sessions', requireAuth(), requireAdmin, async 
   const db = c.env.DB;
 
   const sessions = await db.prepare(`
-    SELECT id, device_id, created_at
+    SELECT token_id as id, device_id, created_at
     FROM access_tokens
     WHERE user_id = ?
     ORDER BY created_at DESC
@@ -928,8 +928,8 @@ app.delete('/admin/api/sessions/:sessionId', requireAuth(), requireAdmin, async 
   const db = c.env.DB;
 
   await db.prepare(
-    'DELETE FROM access_tokens WHERE id = ?'
-  ).bind(parseInt(sessionId)).run();
+    'DELETE FROM access_tokens WHERE token_id = ?'
+  ).bind(sessionId).run();
 
   return c.json({ success: true });
 });
