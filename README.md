@@ -389,7 +389,7 @@ This fork includes comprehensive security improvements over the original impleme
 - **Password Hashing**: PBKDF2-SHA256 (100,000 iterations)
 - **Token Format**: Secure random with user binding
 - **Token Refresh**: Single-use refresh tokens with automatic rotation
-- **Rate Limiting**: Sliding window per-IP and per-user via Durable Objects
+- **Rate Limiting**: Sliding window per-IP and per-user via Durable Objects (from [upstream](https://github.com/nkuntz1934/matrix-workers))
 - **Federation Auth**: Ed25519 request signing with X-Matrix header validation
 - **PDU Validation**: Cryptographic signature verification on all incoming federation events
 - **Authorization Checks**: Full Matrix auth rules enforcement (room version specific)
