@@ -7,6 +7,8 @@ import { Errors } from '../utils/errors';
 import { requireAuth } from '../middleware/auth';
 import { getTypingForRooms } from './typing';
 import { getReceiptsForRooms } from './receipts';
+import { applyRedactionsToEvents } from '../services/redaction';
+import { getEventRaw } from '../services/database';
 // Room cache helper available for future optimizations
 // import { getRoomMetadata, invalidateRoomCache, type RoomMetadata } from '../services/room-cache';
 
@@ -494,7 +496,7 @@ async function getRoomData(
 
     for (const [eventType, stateKey] of config.requiredState) {
       let stateQuery = `
-        SELECT e.event_id, e.event_type, e.state_key, e.content, e.sender, e.origin_server_ts, e.unsigned
+        SELECT e.event_id, e.event_type, e.state_key, e.content, e.sender, e.origin_server_ts, e.unsigned, e.redacted_because
         FROM room_state rs
         JOIN events e ON rs.event_id = e.event_id
         WHERE rs.room_id = ?
@@ -517,18 +519,43 @@ async function getRoomData(
 
       const stateEvents = await db.prepare(stateQuery).bind(...stateParams).all();
 
-      for (const event of stateEvents.results as any[]) {
+      // Build events with their redaction status
+      const eventsWithRedaction = (stateEvents.results as any[]).map(event => {
         try {
-          result.required_state.push({
-            type: event.event_type,
-            state_key: event.state_key,
-            content: JSON.parse(event.content),
-            sender: event.sender,
-            origin_server_ts: event.origin_server_ts,
-            event_id: event.event_id,
-            unsigned: event.unsigned ? JSON.parse(event.unsigned) : undefined,
-          });
-        } catch { /* ignore parse errors */ }
+          return {
+            event: {
+              type: event.event_type,
+              state_key: event.state_key,
+              content: JSON.parse(event.content),
+              sender: event.sender,
+              origin_server_ts: event.origin_server_ts,
+              event_id: event.event_id,
+              room_id: roomId,
+              unsigned: event.unsigned ? JSON.parse(event.unsigned) : undefined,
+              depth: 0,
+              auth_events: [],
+              prev_events: [],
+            },
+            redactedBecause: event.redacted_because as string | null,
+          };
+        } catch {
+          return null;
+        }
+      }).filter((e): e is NonNullable<typeof e> => e !== null);
+
+      // Apply redactions
+      const processedEvents = await applyRedactionsToEvents(eventsWithRedaction, (id) => getEventRaw(db, id));
+
+      for (const event of processedEvents) {
+        result.required_state.push({
+          type: event.type,
+          state_key: event.state_key!,
+          content: event.content,
+          sender: event.sender,
+          origin_server_ts: event.origin_server_ts,
+          event_id: event.event_id,
+          unsigned: event.unsigned,
+        });
       }
     }
   }
@@ -547,7 +574,7 @@ async function getRoomData(
     if (isIncremental) {
       // Incremental: get events since the last sync position
       timelineQuery = `
-        SELECT event_id, event_type, state_key, content, sender, origin_server_ts, unsigned, depth, stream_ordering
+        SELECT event_id, event_type, state_key, content, sender, origin_server_ts, unsigned, depth, stream_ordering, redacted_because
         FROM events
         WHERE room_id = ? AND stream_ordering > ?
         ORDER BY stream_ordering ASC
@@ -557,7 +584,7 @@ async function getRoomData(
     } else {
       // Initial: get the most recent events
       timelineQuery = `
-        SELECT event_id, event_type, state_key, content, sender, origin_server_ts, unsigned, depth, stream_ordering
+        SELECT event_id, event_type, state_key, content, sender, origin_server_ts, unsigned, depth, stream_ordering, redacted_because
         FROM events
         WHERE room_id = ?
         ORDER BY stream_ordering DESC
@@ -577,28 +604,57 @@ async function getRoomData(
     // For initial sync, reverse to get chronological order
     const eventsToProcess = isIncremental ? eventsToUse : eventsToUse.reverse();
 
-    result.timeline = eventsToProcess.map(event => {
+    // Build events with their redaction status
+    const eventsWithRedaction = eventsToProcess.map(event => {
       try {
         return {
-          type: event.event_type,
-          event_id: event.event_id,
-          sender: event.sender,
-          origin_server_ts: event.origin_server_ts,
-          content: JSON.parse(event.content),
-          state_key: event.state_key || undefined,
-          unsigned: event.unsigned ? JSON.parse(event.unsigned) : undefined,
+          event: {
+            type: event.event_type,
+            event_id: event.event_id,
+            sender: event.sender,
+            origin_server_ts: event.origin_server_ts,
+            content: JSON.parse(event.content),
+            state_key: event.state_key || undefined,
+            unsigned: event.unsigned ? JSON.parse(event.unsigned) : undefined,
+            room_id: roomId,
+            depth: event.depth || 0,
+            auth_events: [],
+            prev_events: [],
+          },
+          redactedBecause: event.redacted_because as string | null,
         };
       } catch {
         return {
-          type: event.event_type,
-          event_id: event.event_id,
-          sender: event.sender,
-          origin_server_ts: event.origin_server_ts,
-          content: {},
-          state_key: event.state_key || undefined,
+          event: {
+            type: event.event_type,
+            event_id: event.event_id,
+            sender: event.sender,
+            origin_server_ts: event.origin_server_ts,
+            content: {},
+            state_key: event.state_key || undefined,
+            unsigned: undefined,
+            room_id: roomId,
+            depth: event.depth || 0,
+            auth_events: [],
+            prev_events: [],
+          },
+          redactedBecause: event.redacted_because as string | null,
         };
       }
     });
+
+    // Apply redactions
+    const processedEvents = await applyRedactionsToEvents(eventsWithRedaction, (id) => getEventRaw(db, id));
+
+    result.timeline = processedEvents.map(event => ({
+      type: event.type,
+      event_id: event.event_id,
+      sender: event.sender,
+      origin_server_ts: event.origin_server_ts,
+      content: event.content,
+      state_key: event.state_key,
+      unsigned: event.unsigned,
+    }));
 
     // Track the max stream_ordering we're sending
     if (eventsToProcess.length > 0) {

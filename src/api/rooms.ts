@@ -21,8 +21,10 @@ import {
   getRoomByAlias,
   deleteRoomAlias,
   getEvent,
+  getEventRaw,
   notifyUsersOfEvent,
 } from '../services/database';
+import { applyRedactionsToEvents } from '../services/redaction';
 import type { JoinResult } from '../workflows';
 import { validateEventContent } from '../services/event-validation';
 import { canSendStateEvent, canModifyPowerLevels } from '../services/power-levels';
@@ -1527,31 +1529,91 @@ app.get('/_matrix/client/v3/rooms/:roomId/context/:eventId', requireAuth(), asyn
     timestamp: targetEvent.origin_server_ts,
   });
 
-  // Get events before and after
+  // Get events before and after (including redacted_because for content stripping)
   const halfLimit = Math.floor(limit / 2);
 
   const eventsBefore = await c.env.DB.prepare(`
-    SELECT * FROM events WHERE room_id = ? AND origin_server_ts < ?
+    SELECT event_id, room_id, sender, event_type, state_key, content,
+           origin_server_ts, unsigned, depth, auth_events, prev_events, redacted_because
+    FROM events WHERE room_id = ? AND origin_server_ts < ?
     ORDER BY origin_server_ts DESC LIMIT ?
-  `).bind(roomId, targetEvent.origin_server_ts, halfLimit).all();
+  `).bind(roomId, targetEvent.origin_server_ts, halfLimit).all<{
+    event_id: string;
+    room_id: string;
+    sender: string;
+    event_type: string;
+    state_key: string | null;
+    content: string;
+    origin_server_ts: number;
+    unsigned: string | null;
+    depth: number;
+    auth_events: string;
+    prev_events: string;
+    redacted_because: string | null;
+  }>();
 
   const eventsAfter = await c.env.DB.prepare(`
-    SELECT * FROM events WHERE room_id = ? AND origin_server_ts > ?
+    SELECT event_id, room_id, sender, event_type, state_key, content,
+           origin_server_ts, unsigned, depth, auth_events, prev_events, redacted_because
+    FROM events WHERE room_id = ? AND origin_server_ts > ?
     ORDER BY origin_server_ts ASC LIMIT ?
-  `).bind(roomId, targetEvent.origin_server_ts, halfLimit).all();
+  `).bind(roomId, targetEvent.origin_server_ts, halfLimit).all<{
+    event_id: string;
+    room_id: string;
+    sender: string;
+    event_type: string;
+    state_key: string | null;
+    content: string;
+    origin_server_ts: number;
+    unsigned: string | null;
+    depth: number;
+    auth_events: string;
+    prev_events: string;
+    redacted_because: string | null;
+  }>();
 
-  // Format events
-  const formatEvent = (e: any) => ({
-    type: e.event_type,
+  // Build events with their redaction status
+  const buildEventsWithRedaction = (results: typeof eventsBefore.results) =>
+    results.map(e => ({
+      event: {
+        event_id: e.event_id,
+        room_id: e.room_id,
+        sender: e.sender,
+        type: e.event_type,
+        state_key: e.state_key ?? undefined,
+        content: JSON.parse(e.content || '{}'),
+        origin_server_ts: e.origin_server_ts,
+        unsigned: e.unsigned ? JSON.parse(e.unsigned) : undefined,
+        depth: e.depth,
+        auth_events: JSON.parse(e.auth_events || '[]'),
+        prev_events: JSON.parse(e.prev_events || '[]'),
+      } as PDU,
+      redactedBecause: e.redacted_because,
+    }));
+
+  // Apply redactions
+  const processedEventsBefore = await applyRedactionsToEvents(
+    buildEventsWithRedaction(eventsBefore.results),
+    (id) => getEventRaw(c.env.DB, id)
+  );
+  const processedEventsAfter = await applyRedactionsToEvents(
+    buildEventsWithRedaction(eventsAfter.results),
+    (id) => getEventRaw(c.env.DB, id)
+  );
+
+  // Format events for client response
+  const formatEvent = (e: PDU) => ({
+    type: e.type,
     state_key: e.state_key,
-    content: JSON.parse(e.content || '{}'),
+    content: e.content,
     sender: e.sender,
     origin_server_ts: e.origin_server_ts,
     event_id: e.event_id,
     room_id: e.room_id,
+    unsigned: e.unsigned,
   });
 
-  // Get current state
+  // Get current state (already handles redaction via getRoomState)
   const state = await getRoomState(c.env.DB, roomId);
   const stateEvents = state.map(e => ({
     type: e.type,
@@ -1561,12 +1623,13 @@ app.get('/_matrix/client/v3/rooms/:roomId/context/:eventId', requireAuth(), asyn
     origin_server_ts: e.origin_server_ts,
     event_id: e.event_id,
     room_id: e.room_id,
+    unsigned: e.unsigned,
   }));
 
   return c.json({
     event: formatEvent(targetEvent),
-    events_before: eventsBefore.results.reverse().map(formatEvent),
-    events_after: eventsAfter.results.map(formatEvent),
+    events_before: processedEventsBefore.reverse().map(formatEvent),
+    events_after: processedEventsAfter.map(formatEvent),
     state: stateEvents,
     start: eventsBefore.results.length > 0 ? String(eventsBefore.results[0].origin_server_ts) : undefined,
     end: eventsAfter.results.length > 0 ? String(eventsAfter.results[eventsAfter.results.length - 1].origin_server_ts) : undefined,
