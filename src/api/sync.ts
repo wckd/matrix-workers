@@ -387,12 +387,10 @@ app.get('/_matrix/client/v3/sync', requireAuth(), async (c) => {
     const visibilityContext = await getVisibilityContext(c.env.DB, roomId, userId);
     const visibleEvents = filterEventsByVisibility(events, visibilityContext);
 
-    // Separate state and timeline events
-    let stateEvents: any[] = [];
+    // Build timeline events (all events go in timeline)
     let timelineEvents: any[] = [];
-
     for (const event of visibleEvents) {
-      const clientEvent = {
+      timelineEvents.push({
         type: event.type,
         state_key: event.state_key,
         content: event.content,
@@ -401,20 +399,32 @@ app.get('/_matrix/client/v3/sync', requireAuth(), async (c) => {
         event_id: event.event_id,
         room_id: event.room_id,
         unsigned: event.unsigned,
-      };
-
-      if (event.state_key !== undefined) {
-        // State event - include in both state and timeline
-        stateEvents.push(clientEvent);
-      }
-      timelineEvents.push(clientEvent);
+      });
     }
 
-    // Include full state if requested or initial sync
+    // Track if timeline was truncated before applying filter
+    const timelineCountBeforeFilter = timelineEvents.length;
+
+    // Apply timeline filter
+    timelineEvents = applyEventFilter(timelineEvents, filter?.room?.timeline);
+
+    // Set timeline.limited if events were truncated by filter limit
+    const timelineLimit = filter?.room?.timeline?.limit;
+    if (timelineLimit && timelineCountBeforeFilter > timelineLimit) {
+      joinedRoom.timeline!.limited = true;
+    }
+
+    // Build state.events section
+    // Per spec: For initial sync or full_state=true, include full current room state
+    // For incremental sync, state.events contains state at the START of the timeline gap
+    // (state changes that happened before the returned timeline events)
+    let stateEvents: any[] = [];
+
     if (fullState || sincePosition === 0) {
+      // Initial sync or full_state requested: include full room state
       const state = await getRoomState(c.env.DB, roomId);
       for (const event of state) {
-        const clientEvent = {
+        stateEvents.push({
           type: event.type,
           state_key: event.state_key,
           content: event.content,
@@ -422,21 +432,19 @@ app.get('/_matrix/client/v3/sync', requireAuth(), async (c) => {
           origin_server_ts: event.origin_server_ts,
           event_id: event.event_id,
           room_id: event.room_id,
-        };
-        // Only add if not already in state events from timeline
-        if (!stateEvents.find(e => e.event_id === event.event_id)) {
-          stateEvents.push(clientEvent);
-        }
+        });
       }
     }
+    // For incremental sync without full_state, state.events is empty
+    // because all state changes are included in the timeline
 
-    // Apply filters to state and timeline events
+    // Apply state filter
     stateEvents = applyEventFilter(stateEvents, filter?.room?.state);
-    timelineEvents = applyEventFilter(timelineEvents, filter?.room?.timeline);
 
     joinedRoom.state!.events = stateEvents;
     joinedRoom.timeline!.events = timelineEvents;
-    joinedRoom.timeline!.prev_batch = sincePosition.toString();
+    // Always include prev_batch for pagination
+    joinedRoom.timeline!.prev_batch = sincePosition > 0 ? since! : buildSyncToken(0, 0);
 
     // Get room-level account data
     let roomAccountData = await getRoomAccountData(
