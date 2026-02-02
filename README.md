@@ -119,7 +119,7 @@ These features protect against malicious federation servers and ensure cryptogra
 - **#9: Redaction Content Stripping** ([`src/services/redaction.ts`](src/services/redaction.ts)) - Properly strips content from redacted events per Matrix specification.
 - **#10: History Visibility Enforcement** ([`src/services/history-visibility.ts`](src/services/history-visibility.ts)) - Enforces `m.room.history_visibility` settings on `/messages`, `/context`, and `/sync` endpoints.
 - **#11: Event Hashes Field** ([`src/utils/crypto.ts`](src/utils/crypto.ts)) - Adds required `hashes` field to events for federation compliance via `calculateContentHash()`.
-- **#12: Rate Limiting** ([`src/durable-objects/RateLimitDurableObject.ts`](src/durable-objects/RateLimitDurableObject.ts)) - Re-enabled rate limiting using Durable Objects. Merged from upstream (commit `7516d23`).
+- **#12: Rate Limiting** ([`src/durable-objects/RateLimitDurableObject.ts`](src/durable-objects/RateLimitDurableObject.ts)) - Rate limiting using Durable Objects (merged from [upstream](https://github.com/nkuntz1934/matrix-workers)).
 - **#13: Restricted Room Joins** ([`src/services/authorization.ts`](src/services/authorization.ts)) - Enforces `join_rule: 'restricted'` with full `allow` list validation for space-based access control.
 - **#14: User-Interactive Authentication** ([`src/services/uia.ts`](src/services/uia.ts)) - Complete UIA implementation with proper session tracking for sensitive operations.
 - **#17: Membership Event Validation** ([`src/services/event-validation.ts`](src/services/event-validation.ts)) - Validates `third_party_invite` and `join_authorised_via_users_server` fields in membership events.
