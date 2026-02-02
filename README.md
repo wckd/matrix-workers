@@ -4,6 +4,8 @@
 
 This is a proof of concept Matrix homeserver implementation running entirely on Cloudflare's edge infrastructure. This was built to prove E2EE utilizing Matrix protocols over Element X on the Cloudflare Workers Platform. It is meant to serve as an example prototype and not endorsed as ready for production at this point.
 
+> **Note:** This is a fork of [nkuntz1934/matrix-workers](https://github.com/nkuntz1934/matrix-workers) with extensive security and Matrix specification compliance improvements. See the [Security & Compliance](#security--compliance) section below for details on what we've added.
+
 I was assisted by Claude Code Opus 4.5 for this implementation to speed up showing that you could message over Cloudflare Workers utilizing the Element Web and Element X App. Feel free to submit issues, fork the project to make it your own, or continue to build on this example!
 
 ## Live Demo
@@ -92,6 +94,80 @@ npx wrangler secret put EMAIL_FROM
 | Authenticated Media | [`src/api/media.ts`](src/api/media.ts) | [MSC3916](https://github.com/matrix-org/matrix-spec-proposals/pull/3916) |
 | Cross-signing Reset | [`src/api/keys.ts`](src/api/keys.ts), [`src/api/oauth.ts`](src/api/oauth.ts) | [MSC4312](https://github.com/matrix-org/matrix-spec-proposals/pull/4312) |
 | Account Management | [`src/api/oidc-auth.ts`](src/api/oidc-auth.ts) | [MSC4191](https://github.com/matrix-org/matrix-spec-proposals/pull/4191) |
+
+## Security & Compliance
+
+This fork implements comprehensive security and Matrix specification compliance features that were missing from the original implementation. All issues are tracked at [wckd/matrix-workers/issues](https://github.com/wckd/matrix-workers/issues).
+
+### Completed Security Features
+
+**Critical Priority - Federation Security**
+
+These features protect against malicious federation servers and ensure cryptographic integrity:
+
+- **#16: Ed25519 Cryptography** ([`src/utils/crypto.ts`](src/utils/crypto.ts)) - Implemented proper Ed25519 signature operations using Web Crypto API. The original implementation had broken placeholder code.
+- **#1: PDU Signature Validation** ([`src/services/federation-keys.ts`](src/services/federation-keys.ts)) - Validates cryptographic signatures on all incoming federation events using `verifyServerSignature()`.
+- **#2: Federation Authorization** ([`src/services/authorization.ts`](src/services/authorization.ts)) - Verifies that all incoming events are authorized according to Matrix auth rules (room version specific).
+- **#3: Federation Request Signing** ([`src/services/federation-client.ts`](src/services/federation-client.ts)) - Signs all outgoing federation requests with server's Ed25519 key in X-Matrix header.
+- **#8: Auth Chain Validation** ([`src/services/authorization.ts`](src/services/authorization.ts)) - Validates the `auth_events` chain on incoming PDUs to prevent authorization bypass.
+- **#7: State Resolution v2** ([`src/services/state-resolution.ts`](src/services/state-resolution.ts)) - Implements the complete state resolution algorithm for handling conflicting state.
+- **#6: Event Field Validation** ([`src/services/event-validation.ts`](src/services/event-validation.ts)) - Comprehensive validation for all event fields according to spec.
+
+**High Priority - Security Hardening**
+
+- **#4: Power Level Checks** ([`src/services/power-levels.ts`](src/services/power-levels.ts)) - Verifies users have sufficient power level for state events and actions.
+- **#9: Redaction Content Stripping** ([`src/services/redaction.ts`](src/services/redaction.ts)) - Properly strips content from redacted events per Matrix specification.
+- **#10: History Visibility Enforcement** ([`src/services/history-visibility.ts`](src/services/history-visibility.ts)) - Enforces `m.room.history_visibility` settings on `/messages`, `/context`, and `/sync` endpoints.
+- **#11: Event Hashes Field** ([`src/utils/crypto.ts`](src/utils/crypto.ts)) - Adds required `hashes` field to events for federation compliance via `calculateContentHash()`.
+- **#12: Rate Limiting** ([`src/durable-objects/RateLimitDurableObject.ts`](src/durable-objects/RateLimitDurableObject.ts)) - Re-enabled rate limiting using Durable Objects (was disabled in original). Prevents cascading failures.
+- **#13: Restricted Room Joins** ([`src/services/authorization.ts`](src/services/authorization.ts)) - Enforces `join_rule: 'restricted'` with full `allow` list validation for space-based access control.
+- **#14: User-Interactive Authentication** ([`src/services/uia.ts`](src/services/uia.ts)) - Complete UIA implementation with proper session tracking for sensitive operations.
+- **#17: Membership Event Validation** ([`src/services/event-validation.ts`](src/services/event-validation.ts)) - Validates `third_party_invite` and `join_authorised_via_users_server` fields in membership events.
+
+**Medium Priority**
+
+- **#5: Room Alias Deletion Permissions** ([`src/api/directory.ts`](src/api/directory.ts)) - Enforces creator/admin permissions on room alias deletion.
+
+### Implementation Details
+
+**Signature Verification Architecture**
+
+The implementation uses a unified signature verification system:
+
+```typescript
+// Main verification function - checks any server signature
+verifyServerSignature(obj, server, db, cache, keyId?)
+
+// Specialized wrappers
+verifyPduSignature(pdu, origin, db, cache)      // For PDUs from federation
+verifyRemoteSignature(obj, server, db, cache)   // For other signed objects
+```
+
+Federation keys are cached in both D1 and KV with TTL based on `valid_until_ts` from the remote server.
+
+**Gradual Enforcement**
+
+Security features support gradual rollout via the `SIGNATURE_ENFORCEMENT` environment variable:
+- `'log'` - Log validation failures but allow events through (default for testing)
+- `'enforce'` - Reject events that fail validation (production mode)
+
+**Rate Limiting Architecture**
+
+Rate limiting uses Durable Objects instead of KV to prevent cascading failures:
+- Sliding window algorithm per-IP and per-user
+- Survives Worker crashes
+- Distributed across edge locations
+
+### Remaining Open Issues
+
+- **#15: Sync State Section** - The `state.events` field and `full_state` parameter are not yet implemented in `/sync` responses.
+
+### Testing
+
+All security features have been tested against:
+- matrix.org federation ([view test results](https://federationtester.matrix.org/api/report?server_name=m.easydemo.org))
+- Element Web, Element X (iOS/Android)
+- Manual federation attacks and edge cases
 
 ## Features
 
@@ -297,12 +373,19 @@ npm run db:migrate:local
 
 ## Security
 
+This fork includes comprehensive security improvements over the original implementation. See the [Security & Compliance](#security--compliance) section above for complete details.
+
+**Core Security Features:**
 - **Password Hashing**: PBKDF2-SHA256 (100,000 iterations)
 - **Token Format**: Secure random with user binding
 - **Token Refresh**: Single-use refresh tokens with automatic rotation
 - **Rate Limiting**: Sliding window per-IP and per-user via Durable Objects
 - **Federation Auth**: Ed25519 request signing with X-Matrix header validation
-- **PDU Validation**: Signature verification on incoming federation events
+- **PDU Validation**: Cryptographic signature verification on all incoming federation events
+- **Authorization Checks**: Full Matrix auth rules enforcement (room version specific)
+- **Event Validation**: Comprehensive field validation for all event types
+- **History Visibility**: Enforced on all read endpoints
+- **Power Levels**: Validated for all state changes
 - **Media Auth**: Authenticated media endpoints (MSC3916)
 
 ## Compatibility
