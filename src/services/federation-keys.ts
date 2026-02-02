@@ -401,7 +401,82 @@ export async function getRemoteServerKey(
 }
 
 /**
- * Verify a signature from a remote server
+ * Result of signature verification
+ */
+export interface SignatureVerificationResult {
+  valid: boolean;
+  error?: string;
+  keyId?: string;
+}
+
+/**
+ * Unified signature verification for objects signed by remote servers.
+ *
+ * @param obj - The signed object (PDU, request, etc.)
+ * @param serverName - The server whose signature to verify
+ * @param db - D1 database for key storage
+ * @param cache - KV namespace for key caching
+ * @param keyId - Optional specific key ID to verify against. If omitted, tries all signatures from serverName.
+ * @returns SignatureVerificationResult with valid status, optional error, and keyId used
+ */
+export async function verifyServerSignature(
+  obj: Record<string, unknown>,
+  serverName: string,
+  db: D1Database,
+  cache: KVNamespace,
+  keyId?: string
+): Promise<SignatureVerificationResult> {
+  const signatures = obj.signatures as Record<string, Record<string, string>> | undefined;
+
+  if (!signatures) {
+    return { valid: false, error: 'Object has no signatures' };
+  }
+
+  const serverSignatures = signatures[serverName];
+  if (!serverSignatures) {
+    return { valid: false, error: `No signature from ${serverName}` };
+  }
+
+  // Determine which keys to try
+  const keysToTry = keyId ? [keyId] : Object.keys(serverSignatures);
+
+  if (keysToTry.length === 0) {
+    return { valid: false, error: `No signatures from ${serverName}` };
+  }
+
+  for (const kid of keysToTry) {
+    // Check if this keyId exists in the signatures
+    if (!serverSignatures[kid]) {
+      continue;
+    }
+
+    const key = await getRemoteServerKey(serverName, kid, db, cache);
+    if (!key) {
+      console.warn(`No key found for ${serverName}:${kid}`);
+      continue;
+    }
+
+    // Check key validity (warn but still try - key may have been valid when signed)
+    if (key.valid_until && key.valid_until < Date.now()) {
+      console.warn(`Key ${serverName}:${kid} has expired`);
+    }
+
+    try {
+      const valid = await verifySignature(obj, serverName, kid, key.public_key);
+      if (valid) {
+        return { valid: true, keyId: kid };
+      }
+    } catch (error) {
+      console.error(`Error verifying signature with key ${kid}:`, error);
+    }
+  }
+
+  return { valid: false, error: 'No valid signature found' };
+}
+
+/**
+ * Verify a signature from a remote server (legacy API - returns boolean)
+ * @deprecated Use verifyServerSignature for better error information
  */
 export async function verifyRemoteSignature(
   obj: Record<string, unknown>,
@@ -410,19 +485,8 @@ export async function verifyRemoteSignature(
   db: D1Database,
   cache: KVNamespace
 ): Promise<boolean> {
-  const key = await getRemoteServerKey(serverName, keyId, db, cache);
-  if (!key) {
-    console.warn(`No key found for ${serverName}:${keyId}`);
-    return false;
-  }
-
-  // Check key validity
-  if (key.valid_until && key.valid_until < Date.now()) {
-    console.warn(`Key ${serverName}:${keyId} has expired`);
-    // Still try to verify - the key might have been valid when the signature was made
-  }
-
-  return verifySignature(obj, serverName, keyId, key.public_key);
+  const result = await verifyServerSignature(obj, serverName, db, cache, keyId);
+  return result.valid;
 }
 
 // --- Outgoing Request Signing ---
@@ -757,55 +821,14 @@ void CACHE_KEY_PREFIX;
 /**
  * Result of PDU signature verification
  */
-export interface SignatureVerificationResult {
-  valid: boolean;
-  error?: string;
-  keyId?: string;
-}
-
 /**
- * Verify signatures on a PDU from a remote server
+ * Verify signatures on a PDU from a remote server.
+ * Convenience wrapper around verifyServerSignature that takes Env.
  */
 export async function verifyPduSignature(
   env: Env,
   pdu: Record<string, unknown>,
   originServer: string
 ): Promise<SignatureVerificationResult> {
-  const signatures = pdu.signatures as Record<string, Record<string, string>> | undefined;
-
-  if (!signatures) {
-    return { valid: false, error: 'PDU has no signatures' };
-  }
-
-  const serverSignatures = signatures[originServer];
-  if (!serverSignatures) {
-    return { valid: false, error: `PDU has no signature from origin server ${originServer}` };
-  }
-
-  // Get server keys
-  const serverKeys = await getServerKeys(env, originServer);
-  if (!serverKeys) {
-    return { valid: false, error: `Failed to fetch keys for server ${originServer}` };
-  }
-
-  // Try each signature from the origin server
-  for (const keyId of Object.keys(serverSignatures)) {
-    // Get the public key
-    const publicKey = await getServerPublicKey(env, originServer, keyId);
-    if (!publicKey) {
-      console.warn(`Key ${keyId} not found for server ${originServer}`);
-      continue;
-    }
-
-    try {
-      const valid = await verifyJsonSignature(pdu, originServer, keyId, publicKey);
-      if (valid) {
-        return { valid: true, keyId };
-      }
-    } catch (error) {
-      console.error(`Error verifying PDU signature with key ${keyId}:`, error);
-    }
-  }
-
-  return { valid: false, error: 'No valid signature found' };
+  return verifyServerSignature(pdu, originServer, env.DB, env.CACHE);
 }
