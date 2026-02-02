@@ -122,6 +122,7 @@ These features protect against malicious federation servers and ensure cryptogra
 - **#12: Rate Limiting** ([`src/durable-objects/RateLimitDurableObject.ts`](src/durable-objects/RateLimitDurableObject.ts)) - Rate limiting using Durable Objects (merged from [upstream](https://github.com/nkuntz1934/matrix-workers)).
 - **#13: Restricted Room Joins** ([`src/services/authorization.ts`](src/services/authorization.ts)) - Enforces `join_rule: 'restricted'` with full `allow` list validation for space-based access control.
 - **#14: User-Interactive Authentication** ([`src/services/uia.ts`](src/services/uia.ts)) - Complete UIA implementation with proper session tracking for sensitive operations.
+- **#15: Sync State Section** ([`src/api/sync.ts`](src/api/sync.ts)) - Correct `state.events` population, `full_state` parameter, `timeline.limited`, and `prev_batch` handling.
 - **#17: Membership Event Validation** ([`src/services/event-validation.ts`](src/services/event-validation.ts)) - Validates `third_party_invite` and `join_authorised_via_users_server` fields in membership events.
 
 **Medium Priority**
@@ -157,10 +158,6 @@ Rate limiting uses Durable Objects instead of KV to prevent cascading failures:
 - Sliding window algorithm per-IP and per-user
 - Survives Worker crashes
 - Distributed across edge locations
-
-### Remaining Open Issues
-
-- **#15: Sync State Section** - The `state.events` field and `full_state` parameter are not yet implemented in `/sync` responses.
 
 ### Testing
 
