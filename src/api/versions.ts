@@ -41,6 +41,91 @@ app.get('/.well-known/matrix/server', (c) => {
   });
 });
 
+// GET /.well-known/openid-configuration - OIDC Discovery endpoint
+// This is required for Element Web OIDC-native authentication
+// See: https://spec.matrix.org/v1.17/client-server-api/#oauth-20-api
+app.get('/.well-known/openid-configuration', (c) => {
+  const serverName = c.env.SERVER_NAME;
+  const baseUrl = `https://${serverName}`;
+
+  // Return standard OIDC discovery document
+  // Element Web requires all these fields to be present
+  return c.json({
+    issuer: baseUrl,
+    authorization_endpoint: `${baseUrl}/oauth/authorize`,
+    token_endpoint: `${baseUrl}/oauth/token`,
+    userinfo_endpoint: `${baseUrl}/oauth/userinfo`,
+    jwks_uri: `${baseUrl}/.well-known/jwks.json`,
+    registration_endpoint: `${baseUrl}/oauth/register`,
+    revocation_endpoint: `${baseUrl}/oauth/revoke`,
+    introspection_endpoint: `${baseUrl}/oauth/introspect`,
+    scopes_supported: [
+      'openid',
+      'profile',
+      'email',
+      'urn:matrix:org.matrix.msc2967.client:api:*',
+      'urn:matrix:org.matrix.msc2967.client:device:*',
+    ],
+    response_types_supported: ['code'],
+    response_modes_supported: ['query', 'fragment'],
+    grant_types_supported: ['authorization_code', 'refresh_token'],
+    token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'none'],
+    code_challenge_methods_supported: ['S256', 'plain'],
+    subject_types_supported: ['public'],
+    id_token_signing_alg_values_supported: ['RS256', 'ES256'],
+    claims_supported: ['sub', 'iss', 'aud', 'exp', 'iat', 'name', 'email'],
+    // Matrix-specific extension
+    'org.matrix.matrix-authentication-service': {
+      graphql_endpoint: null,
+      account: {
+        issuer: baseUrl,
+      },
+    },
+  });
+});
+
+// GET /.well-known/jwks.json - JSON Web Key Set for token verification
+app.get('/.well-known/jwks.json', (c) => {
+  // Return an empty JWKS - clients can't verify our tokens without keys
+  // In a real implementation, you'd generate and store RSA keys
+  // For now, returning a placeholder that indicates we use opaque tokens
+  return c.json({
+    keys: [],
+  });
+});
+
+// GET /.well-known/matrix/support - Server support contact information
+// Spec: https://spec.matrix.org/v1.17/client-server-api/#getwell-knownmatrixsupport
+app.get('/.well-known/matrix/support', (c) => {
+  const contacts: Array<{
+    role: string;
+    email_address?: string;
+    matrix_id?: string;
+  }> = [];
+
+  // Add admin contact if configured
+  if (c.env.ADMIN_CONTACT_EMAIL || c.env.ADMIN_CONTACT_MXID) {
+    contacts.push({
+      role: 'm.role.admin',
+      email_address: c.env.ADMIN_CONTACT_EMAIL,
+      matrix_id: c.env.ADMIN_CONTACT_MXID,
+    });
+  }
+
+  const response: {
+    contacts: typeof contacts;
+    support_page?: string;
+  } = {
+    contacts,
+  };
+
+  if (c.env.SUPPORT_PAGE_URL) {
+    response.support_page = c.env.SUPPORT_PAGE_URL;
+  }
+
+  return c.json(response);
+});
+
 // GET /_matrix/client/versions
 app.get('/_matrix/client/versions', (c) => {
   return c.json({
@@ -102,7 +187,7 @@ app.get('/_matrix/client/versions', (c) => {
 app.get('/_matrix/federation/v1/version', (c) => {
   return c.json({
     server: {
-      name: 'tuwunel-workers',
+      name: 'matrix-worker',
       version: c.env.SERVER_VERSION,
     },
   });

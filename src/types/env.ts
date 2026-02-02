@@ -22,13 +22,24 @@ export interface Env {
   ADMIN: DurableObjectNamespace;
   USER_KEYS: DurableObjectNamespace;
   PUSH: DurableObjectNamespace;
+  RATE_LIMIT: DurableObjectNamespace;
 
   // Environment variables
   SERVER_NAME: string;
   SERVER_VERSION: string;
 
+  // Support contact info (optional)
+  ADMIN_CONTACT_EMAIL?: string;
+  ADMIN_CONTACT_MXID?: string;
+  SUPPORT_PAGE_URL?: string;
+
   // Secrets (to be configured)
   SIGNING_KEY?: string;
+
+  // OIDC encryption key for client secrets (32 random bytes, base64 encoded)
+  // Generate with: openssl rand -base64 32
+  // Set with: npx wrangler secret put OIDC_ENCRYPTION_KEY
+  OIDC_ENCRYPTION_KEY?: string;
 
   // Cloudflare TURN Server Configuration
   TURN_KEY_ID?: string;
@@ -61,6 +72,10 @@ export interface Env {
 
   // Federation signature enforcement: 'log' (warn only) or 'enforce' (reject invalid)
   SIGNATURE_ENFORCEMENT?: string;
+
+  // Email Service Configuration (Resend)
+  RESEND_API_KEY?: string;   // Resend API key for email verification
+  EMAIL_FROM?: string;       // From address for verification emails (e.g., "noreply@m.example.com")
 }
 
 // Variables set by middleware and available via c.get()

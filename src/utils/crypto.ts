@@ -1,5 +1,10 @@
 // Cryptographic utilities for Matrix homeserver
 
+import { base64UrlEncode, base64UrlDecode } from './ids';
+
+// Re-export for convenience
+export { base64UrlEncode, base64UrlDecode };
+
 // ============================================================================
 // Base64 Utilities (Matrix uses unpadded Base64)
 // ============================================================================
@@ -25,6 +30,18 @@ export function bytesToUnpadBase64(bytes: Uint8Array): string {
 // ============================================================================
 // Ed25519 Cryptographic Operations
 // ============================================================================
+
+// Ed25519 algorithm parameters for Cloudflare Workers
+// Note: NODE-ED25519 is Cloudflare Workers' proprietary Ed25519 implementation
+interface Ed25519Params {
+  name: 'NODE-ED25519';
+  namedCurve: 'NODE-ED25519';
+}
+
+interface Ed25519KeyPair {
+  publicKey: CryptoKey;
+  privateKey: CryptoKey;
+}
 
 /**
  * Generate an Ed25519 key pair for signing
@@ -207,31 +224,78 @@ export async function hashToken(token: string): Promise<string> {
   return sha256(token);
 }
 
-/**
- * Generate Ed25519 key pair for signing (legacy wrapper)
- * @deprecated Use generateEd25519KeyPair() directly
- */
+// ============================================================================
+// Signing Key Generation (NODE-ED25519 variant for compatibility)
+// ============================================================================
+
+// Generate Ed25519 key pair for signing using Cloudflare Workers' NODE-ED25519 algorithm
 export async function generateSigningKeyPair(): Promise<{
+  publicKey: string;
+  privateKeyJwk: JsonWebKey;
+  keyId: string;
+}> {
+  // Generate Ed25519 key pair using Cloudflare Workers' native support
+  const keyPair = (await crypto.subtle.generateKey(
+    { name: 'NODE-ED25519', namedCurve: 'NODE-ED25519' } as Ed25519Params,
+    true, // extractable
+    ['sign', 'verify']
+  )) as Ed25519KeyPair;
+
+  // Export the public key as JWK to get the raw key bytes
+  const publicKeyJwk = (await crypto.subtle.exportKey('jwk', keyPair.publicKey)) as JsonWebKey;
+  const privateKeyJwk = (await crypto.subtle.exportKey('jwk', keyPair.privateKey)) as JsonWebKey;
+
+  // Get raw public key bytes from the JWK 'x' parameter
+  const publicKeyBytes = base64UrlDecode(publicKeyJwk.x!);
+
+  // Generate key ID from first 4 bytes of public key hash (for uniqueness)
+  const keyIdHash = new Uint8Array(await crypto.subtle.digest('SHA-256', publicKeyBytes)).slice(
+    0,
+    4
+  );
+  const keyId = `ed25519:${Array.from(keyIdHash)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')}`;
+
+  return {
+    publicKey: base64UrlEncode(publicKeyBytes),
+    privateKeyJwk,
+    keyId,
+  };
+}
+
+// Legacy function for backwards compatibility during migration
+// Returns the old format but with a proper key
+export async function generateSigningKeyPairLegacy(): Promise<{
   publicKey: string;
   privateKey: string;
   keyId: string;
 }> {
-  return generateEd25519KeyPair();
+  const { publicKey, privateKeyJwk, keyId } = await generateSigningKeyPair();
+  return {
+    publicKey,
+    privateKey: JSON.stringify(privateKeyJwk),
+    keyId,
+  };
 }
+
+// ============================================================================
+// JSON Signing (supports both key formats)
+// ============================================================================
 
 /**
  * Sign a JSON object per Matrix spec
  * @param obj - Object to sign (signatures and unsigned fields will be removed before signing)
  * @param serverName - Server name to attribute signature to
  * @param keyId - Key ID (e.g., "ed25519:abc123")
- * @param privateKey - Private key as unpadded Base64 (PKCS8 format)
+ * @param privateKey - Private key as unpadded Base64 (PKCS8 format) or JWK
  * @returns Object with signatures field added
  */
 export async function signJson(
   obj: Record<string, unknown>,
   serverName: string,
   keyId: string,
-  privateKey: string
+  privateKey: string | JsonWebKey
 ): Promise<Record<string, unknown>> {
   // Remove signatures and unsigned before signing (per Matrix spec)
   const toSign = { ...obj };
@@ -243,8 +307,38 @@ export async function signJson(
   const encoder = new TextEncoder();
   const data = encoder.encode(canonical);
 
-  // Sign with Ed25519
-  const signature = await signEd25519(data, privateKey);
+  let signature: string;
+
+  // Handle both PKCS8 (our format) and JWK (upstream format) private keys
+  if (typeof privateKey === 'string') {
+    // Check if it's a JSON string (JWK)
+    if (privateKey.startsWith('{')) {
+      const jwk = JSON.parse(privateKey) as JsonWebKey;
+      const key = await crypto.subtle.importKey(
+        'jwk',
+        jwk,
+        { name: 'NODE-ED25519', namedCurve: 'NODE-ED25519' } as Ed25519Params,
+        false,
+        ['sign']
+      );
+      const signatureBytes = await crypto.subtle.sign({ name: 'NODE-ED25519' }, key, data);
+      signature = base64UrlEncode(new Uint8Array(signatureBytes));
+    } else {
+      // PKCS8 format
+      signature = await signEd25519(data, privateKey);
+    }
+  } else {
+    // JWK object
+    const key = await crypto.subtle.importKey(
+      'jwk',
+      privateKey,
+      { name: 'NODE-ED25519', namedCurve: 'NODE-ED25519' } as Ed25519Params,
+      false,
+      ['sign']
+    );
+    const signatureBytes = await crypto.subtle.sign({ name: 'NODE-ED25519' }, key, data);
+    signature = base64UrlEncode(new Uint8Array(signatureBytes));
+  }
 
   // Merge with existing signatures if present
   const existingSignatures = (obj['signatures'] as Record<string, Record<string, string>>) || {};
@@ -292,8 +386,31 @@ export async function verifyJsonSignature(
   const encoder = new TextEncoder();
   const data = encoder.encode(canonical);
 
-  return verifyEd25519(data, signature, publicKey);
+  // Try standard Ed25519 first, then NODE-ED25519
+  try {
+    return await verifyEd25519(data, signature, publicKey);
+  } catch {
+    // Fall back to NODE-ED25519 with URL-safe base64
+    try {
+      const publicKeyBytes = base64UrlDecode(publicKey);
+      const key = await crypto.subtle.importKey(
+        'raw',
+        publicKeyBytes,
+        { name: 'NODE-ED25519', namedCurve: 'NODE-ED25519' } as Ed25519Params,
+        false,
+        ['verify']
+      );
+      const signatureBytes = base64UrlDecode(signature);
+      return await crypto.subtle.verify({ name: 'NODE-ED25519' }, key, signatureBytes, data);
+    } catch (error) {
+      console.error('Signature verification failed:', error);
+      return false;
+    }
+  }
 }
+
+// Alias for compatibility with upstream code
+export const verifySignature = verifyJsonSignature;
 
 // Canonical JSON for signing
 export function canonicalJson(obj: unknown): string {
@@ -366,7 +483,7 @@ export function generateRandomString(length: number = 32): string {
  * @param origin - Origin server name (this server)
  * @param destination - Destination server name
  * @param keyId - Key ID (e.g., "ed25519:abc123")
- * @param privateKey - Private key as unpadded Base64 (PKCS8 format)
+ * @param privateKey - Private key as unpadded Base64 (PKCS8 format) or JWK string
  * @param content - Optional request body (for PUT/POST)
  * @returns Authorization header value
  */
@@ -396,7 +513,24 @@ export async function signFederationRequest(
   const canonical = canonicalJson(requestObject);
   const encoder = new TextEncoder();
   const data = encoder.encode(canonical);
-  const signature = await signEd25519(data, privateKey);
+
+  let signature: string;
+
+  // Handle both PKCS8 and JWK formats
+  if (privateKey.startsWith('{')) {
+    const jwk = JSON.parse(privateKey) as JsonWebKey;
+    const key = await crypto.subtle.importKey(
+      'jwk',
+      jwk,
+      { name: 'NODE-ED25519', namedCurve: 'NODE-ED25519' } as Ed25519Params,
+      false,
+      ['sign']
+    );
+    const signatureBytes = await crypto.subtle.sign({ name: 'NODE-ED25519' }, key, data);
+    signature = base64UrlEncode(new Uint8Array(signatureBytes));
+  } else {
+    signature = await signEd25519(data, privateKey);
+  }
 
   // Build Authorization header
   // Format: X-Matrix origin="${origin}",destination="${destination}",key="${keyId}",sig="${signature}"
@@ -466,5 +600,25 @@ export async function verifyFederationRequest(
   const encoder = new TextEncoder();
   const data = encoder.encode(canonical);
 
-  return verifyEd25519(data, signature, publicKey);
+  // Try standard Ed25519 first
+  try {
+    return await verifyEd25519(data, signature, publicKey);
+  } catch {
+    // Fall back to NODE-ED25519 with URL-safe base64
+    try {
+      const publicKeyBytes = base64UrlDecode(publicKey);
+      const key = await crypto.subtle.importKey(
+        'raw',
+        publicKeyBytes,
+        { name: 'NODE-ED25519', namedCurve: 'NODE-ED25519' } as Ed25519Params,
+        false,
+        ['verify']
+      );
+      const signatureBytes = base64UrlDecode(signature);
+      return await crypto.subtle.verify({ name: 'NODE-ED25519' }, key, signatureBytes, data);
+    } catch (error) {
+      console.error('Federation request verification failed:', error);
+      return false;
+    }
+  }
 }

@@ -1839,11 +1839,213 @@ app.delete('/_matrix/client/v3/directory/room/:roomAlias', requireAuth(), async 
 });
 
 // ============================================
+// Room Summary (MSC3266)
+// ============================================
+
+// GET /_matrix/client/v1/room_summary/:roomIdOrAlias - Get a summary of a room
+// Allows previewing a room without joining it (if permitted by room settings)
+app.get('/_matrix/client/v1/room_summary/:roomIdOrAlias', async (c) => {
+  const roomIdOrAlias = decodeURIComponent(c.req.param('roomIdOrAlias'));
+  const db = c.env.DB;
+
+  let roomId = roomIdOrAlias;
+
+  // Resolve alias to room_id if needed
+  if (roomIdOrAlias.startsWith('#')) {
+    const aliasResult = await db.prepare(
+      `SELECT room_id FROM room_aliases WHERE alias = ?`
+    ).bind(roomIdOrAlias).first<{ room_id: string }>();
+    if (!aliasResult) {
+      return Errors.notFound('Room alias not found').toResponse();
+    }
+    roomId = aliasResult.room_id;
+  }
+
+  // Get room info
+  const room = await db.prepare(
+    `SELECT room_id, room_version, is_public FROM rooms WHERE room_id = ?`
+  ).bind(roomId).first<{ room_id: string; room_version: string; is_public: number }>();
+
+  if (!room) {
+    return Errors.notFound('Room not found').toResponse();
+  }
+
+  // Get room state events we need
+  const stateEvents = await db.prepare(`
+    SELECT e.event_type, e.content FROM room_state rs
+    JOIN events e ON rs.event_id = e.event_id
+    WHERE rs.room_id = ? AND rs.event_type IN (
+      'm.room.name', 'm.room.topic', 'm.room.avatar',
+      'm.room.join_rules', 'm.room.canonical_alias', 'm.room.encryption',
+      'm.room.history_visibility', 'm.room.guest_access'
+    )
+  `).bind(roomId).all<{ event_type: string; content: string }>();
+
+  // Get member count
+  const memberCount = await db.prepare(
+    `SELECT COUNT(*) as count FROM room_memberships WHERE room_id = ? AND membership = 'join'`
+  ).bind(roomId).first<{ count: number }>();
+
+  // Build response
+  const response: Record<string, unknown> = {
+    room_id: roomId,
+    num_joined_members: memberCount?.count || 0,
+    room_version: room.room_version,
+  };
+
+  // Extract state
+  let joinRule = 'invite';
+  let historyVisibility = 'shared';
+  let worldReadable = false;
+  let guestCanJoin = false;
+
+  for (const event of stateEvents.results || []) {
+    const content = JSON.parse(event.content);
+    switch (event.event_type) {
+      case 'm.room.name':
+        response.name = content.name;
+        break;
+      case 'm.room.topic':
+        response.topic = content.topic;
+        break;
+      case 'm.room.avatar':
+        response.avatar_url = content.url;
+        break;
+      case 'm.room.join_rules':
+        joinRule = content.join_rule;
+        response.join_rule = joinRule;
+        break;
+      case 'm.room.canonical_alias':
+        response.canonical_alias = content.alias;
+        break;
+      case 'm.room.encryption':
+        response.encryption = content.algorithm;
+        break;
+      case 'm.room.history_visibility':
+        historyVisibility = content.history_visibility;
+        worldReadable = historyVisibility === 'world_readable';
+        break;
+      case 'm.room.guest_access':
+        guestCanJoin = content.guest_access === 'can_join';
+        break;
+    }
+  }
+
+  response.world_readable = worldReadable;
+  response.guest_can_join = guestCanJoin;
+
+  // Check user membership if authenticated (optional auth)
+  const authHeader = c.req.header('Authorization');
+  if (authHeader?.startsWith('Bearer ')) {
+    const token = authHeader.slice(7);
+    const { hashToken } = await import('../utils/crypto');
+    const tokenHash = await hashToken(token);
+    const tokenResult = await db.prepare(
+      `SELECT user_id FROM access_tokens WHERE token_hash = ?`
+    ).bind(tokenHash).first<{ user_id: string }>();
+
+    if (tokenResult) {
+      const membership = await db.prepare(
+        `SELECT membership FROM room_memberships WHERE room_id = ? AND user_id = ?`
+      ).bind(roomId, tokenResult.user_id).first<{ membership: string }>();
+      response.membership = membership?.membership || 'leave';
+    }
+  }
+
+  // Check if room summary is allowed based on join rules
+  // For non-public rooms, only show summary if user is a member or if world_readable
+  if (!room.is_public && !worldReadable && !response.membership) {
+    // Don't reveal room existence for private rooms to non-members
+    if (!['public', 'knock', 'knock_restricted'].includes(joinRule)) {
+      return Errors.notFound('Room not found').toResponse();
+    }
+  }
+
+  return c.json(response);
+});
+
+// ============================================
+// Timestamp to Event (MSC3030)
+// ============================================
+
+// GET /_matrix/client/v3/rooms/:roomId/timestamp_to_event
+// Finds the closest event to a given timestamp
+app.get('/_matrix/client/v3/rooms/:roomId/timestamp_to_event', requireAuth(), async (c) => {
+  const userId = c.get('userId');
+  const roomId = c.req.param('roomId');
+  const db = c.env.DB;
+
+  // Parse required parameters
+  const tsParam = c.req.query('ts');
+  const dirParam = c.req.query('dir');
+
+  if (!tsParam) {
+    return Errors.missingParam('ts').toResponse();
+  }
+  if (!dirParam) {
+    return Errors.missingParam('dir').toResponse();
+  }
+
+  const ts = parseInt(tsParam, 10);
+  if (isNaN(ts)) {
+    return c.json({
+      errcode: 'M_INVALID_PARAM',
+      error: 'ts must be a valid integer timestamp in milliseconds',
+    }, 400);
+  }
+
+  if (dirParam !== 'f' && dirParam !== 'b') {
+    return c.json({
+      errcode: 'M_INVALID_PARAM',
+      error: "dir must be 'f' (forward) or 'b' (backward)",
+    }, 400);
+  }
+
+  // Check membership - user must be joined to the room
+  const membership = await getMembership(db, roomId, userId);
+  if (!membership || membership.membership !== 'join') {
+    return Errors.forbidden('Not a member of this room').toResponse();
+  }
+
+  // Query for the closest event
+  let event: { event_id: string; origin_server_ts: number } | null = null;
+
+  if (dirParam === 'f') {
+    // Forward: find the closest event at or after the timestamp
+    event = await db.prepare(`
+      SELECT event_id, origin_server_ts
+      FROM events
+      WHERE room_id = ? AND origin_server_ts >= ?
+      ORDER BY origin_server_ts ASC
+      LIMIT 1
+    `).bind(roomId, ts).first<{ event_id: string; origin_server_ts: number }>();
+  } else {
+    // Backward: find the closest event at or before the timestamp
+    event = await db.prepare(`
+      SELECT event_id, origin_server_ts
+      FROM events
+      WHERE room_id = ? AND origin_server_ts <= ?
+      ORDER BY origin_server_ts DESC
+      LIMIT 1
+    `).bind(roomId, ts).first<{ event_id: string; origin_server_ts: number }>();
+  }
+
+  if (!event) {
+    return Errors.notFound('No event found for the given timestamp').toResponse();
+  }
+
+  return c.json({
+    event_id: event.event_id,
+    origin_server_ts: event.origin_server_ts,
+  });
+});
+
+// ============================================
 // Room Upgrade
 // ============================================
 
 // Supported room versions
-const SUPPORTED_ROOM_VERSIONS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'];
+const SUPPORTED_ROOM_VERSIONS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'];
 
 // POST /_matrix/client/v3/rooms/:roomId/upgrade - Upgrade a room to a new version
 app.post('/_matrix/client/v3/rooms/:roomId/upgrade', requireAuth(), async (c) => {

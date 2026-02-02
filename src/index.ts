@@ -1,4 +1,4 @@
-// Tuwunel - Matrix Homeserver on Cloudflare Workers
+// Matrix Homeserver on Cloudflare Workers
 // Main entry point
 
 import { Hono } from 'hono';
@@ -38,12 +38,13 @@ import calls from './api/calls';
 import rtc from './api/rtc';
 // import qrLogin from './api/qr-login'; // QR feature commented out - requires MSC4108/OIDC for Element X
 import oidcAuth from './api/oidc-auth';
+import oauth from './api/oauth';
 import { adminDashboardHtml } from './admin/dashboard';
 import { rateLimitMiddleware } from './middleware/rate-limit';
 import { requireAuth } from './middleware/auth';
 
 // Import Durable Objects
-export { RoomDurableObject, SyncDurableObject, FederationDurableObject, CallRoomDurableObject, AdminDurableObject, UserKeysDurableObject, PushDurableObject } from './durable-objects';
+export { RoomDurableObject, SyncDurableObject, FederationDurableObject, CallRoomDurableObject, AdminDurableObject, UserKeysDurableObject, PushDurableObject, RateLimitDurableObject } from './durable-objects';
 
 // Import Workflows
 export { RoomJoinWorkflow, PushNotificationWorkflow } from './workflows';
@@ -68,15 +69,32 @@ app.use('*', logger());
 app.use('/_matrix/*', rateLimitMiddleware);
 
 // Health check
-app.get('/health', (c) => c.json({ status: 'ok', server: 'tuwunel-workers' }));
+app.get('/health', (c) => c.json({ status: 'ok', server: 'matrix-worker' }));
 
-// Admin dashboard - serve HTML
+// Admin dashboard - serve HTML with security headers
 app.get('/admin', (c) => {
-  return c.html(adminDashboardHtml(c.env.SERVER_NAME));
+  const html = adminDashboardHtml(c.env.SERVER_NAME);
+  return c.html(html, 200, {
+    // Content-Security-Policy for XSS protection
+    // 'unsafe-inline' is needed for the inline scripts/styles in the dashboard
+    // This could be improved by moving scripts to external files with nonces
+    'Content-Security-Policy':
+      "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; frame-ancestors 'none'",
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
+  });
 });
 
 app.get('/admin/', (c) => {
-  return c.html(adminDashboardHtml(c.env.SERVER_NAME));
+  const html = adminDashboardHtml(c.env.SERVER_NAME);
+  return c.html(html, 200, {
+    'Content-Security-Policy':
+      "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; frame-ancestors 'none'",
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
+  });
 });
 
 // Admin API routes
@@ -87,6 +105,9 @@ app.route('/', admin);
 
 // OIDC/SSO authentication
 app.route('/', oidcAuth);
+
+// OAuth 2.0 provider endpoints
+app.route('/', oauth);
 
 // Matrix version discovery
 app.route('/', versions);
@@ -146,6 +167,7 @@ app.get('/_matrix/client/v3/capabilities', (c) => {
           '9': 'stable',
           '10': 'stable',
           '11': 'stable',
+          '12': 'stable',
         },
       },
       'm.set_displayname': {
@@ -155,7 +177,7 @@ app.get('/_matrix/client/v3/capabilities', (c) => {
         enabled: true,
       },
       'm.3pid_changes': {
-        enabled: false,
+        enabled: true,
       },
     },
   });
@@ -163,14 +185,56 @@ app.get('/_matrix/client/v3/capabilities', (c) => {
 
 // Push rules now handled by push.ts
 
-// Filter endpoints (stub)
-app.post('/_matrix/client/v3/user/:userId/filter', async (c) => {
+// Filter endpoints - persist filters in KV for sync optimization
+app.post('/_matrix/client/v3/user/:userId/filter', requireAuth(), async (c) => {
+  const userId = c.get('userId');
+  const requestedUserId = c.req.param('userId');
+
+  // Users can only create filters for themselves
+  if (userId !== requestedUserId) {
+    return c.json({ errcode: 'M_FORBIDDEN', error: 'Cannot create filters for other users' }, 403);
+  }
+
+  let filter: Record<string, unknown>;
+  try {
+    filter = await c.req.json();
+  } catch {
+    return c.json({ errcode: 'M_BAD_JSON', error: 'Invalid JSON' }, 400);
+  }
+
+  // Generate filter ID and store in KV
   const filterId = crypto.randomUUID().split('-')[0];
+  await c.env.CACHE.put(
+    `filter:${userId}:${filterId}`,
+    JSON.stringify(filter),
+    { expirationTtl: 30 * 24 * 60 * 60 } // 30 days TTL
+  );
+
   return c.json({ filter_id: filterId });
 });
 
-app.get('/_matrix/client/v3/user/:userId/filter/:filterId', async (c) => {
-  return c.json({});
+app.get('/_matrix/client/v3/user/:userId/filter/:filterId', requireAuth(), async (c) => {
+  const userId = c.get('userId');
+  const requestedUserId = c.req.param('userId');
+  const filterId = c.req.param('filterId');
+
+  // Users can only read their own filters
+  if (userId !== requestedUserId) {
+    return c.json({ errcode: 'M_FORBIDDEN', error: 'Cannot read filters for other users' }, 403);
+  }
+
+  const filterJson = await c.env.CACHE.get(`filter:${userId}:${filterId}`);
+  if (!filterJson) {
+    // Return empty filter if not found (per spec, unknown filter IDs should return empty)
+    return c.json({});
+  }
+
+  try {
+    const filter = JSON.parse(filterJson);
+    return c.json(filter);
+  } catch {
+    return c.json({});
+  }
 });
 
 // Account data endpoints now handled by account-data.ts
@@ -314,19 +378,16 @@ app.get('/_matrix/client/unstable/org.matrix.msc3814.v1/dehydrated_device', asyn
   }, 404);
 });
 
-// OIDC auth metadata (MSC2965 - stub indicating no OIDC support)
+// OIDC auth metadata endpoints are now handled by oidc-auth.ts
+// Legacy unstable endpoint for backwards compatibility
 app.get('/_matrix/client/unstable/org.matrix.msc2965/auth_issuer', async (c) => {
-  return c.json({
-    errcode: 'M_UNRECOGNIZED',
-    error: 'OIDC not supported',
-  }, 404);
+  // Redirect to the stable endpoint implementation
+  return c.redirect('/_matrix/client/v1/auth_metadata', 307);
 });
 
 app.get('/_matrix/client/unstable/org.matrix.msc2965/auth_metadata', async (c) => {
-  return c.json({
-    errcode: 'M_UNRECOGNIZED',
-    error: 'OIDC not supported',
-  }, 404);
+  // Redirect to the stable endpoint implementation
+  return c.redirect('/_matrix/client/v1/auth_metadata', 307);
 });
 
 // Fallback for unknown endpoints
