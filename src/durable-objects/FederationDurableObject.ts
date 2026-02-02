@@ -2,6 +2,7 @@
 
 import { DurableObject } from 'cloudflare:workers';
 import type { Env } from '../types';
+import { FederationClient } from '../services/federation-client';
 
 interface FederationTarget {
   serverName: string;
@@ -214,19 +215,17 @@ export class FederationDurableObject extends DurableObject<Env> {
     events.sort((a, b) => a.created_at - b.created_at);
 
     // Batch events for transmission
-    const pdus = events.map(e => e.pdu);
+    const pdus = events.map((e) => e.pdu);
 
     try {
-      const response = await fetch(`https://${destination}/_matrix/federation/v1/send/${Date.now()}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          // In production, add signature headers
-        },
-        body: JSON.stringify({
-          pdus,
-          edus: [],
-        }),
+      // Use federation client with signed requests
+      const client = new FederationClient(this.env);
+      const txnId = Date.now().toString();
+      const path = `/_matrix/federation/v1/send/${txnId}`;
+
+      const response = await client.put(destination, path, {
+        pdus,
+        edus: [],
       });
 
       if (response.ok) {
@@ -245,6 +244,7 @@ export class FederationDurableObject extends DurableObject<Env> {
         await this.ctx.storage.put(`server:${destination}`, target);
       } else {
         // Schedule retry
+        console.error(`Federation send to ${destination} failed: ${response.error}`);
         await this.scheduleRetry(destination, events);
       }
     } catch (e) {
