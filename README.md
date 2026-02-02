@@ -4,11 +4,11 @@
 
 This is a proof of concept Matrix homeserver implementation running entirely on Cloudflare's edge infrastructure. This was built to prove E2EE utilizing Matrix protocols over Element X on the Cloudflare Workers Platform. It is meant to serve as an example prototype and not endorsed as ready for production at this point.
 
-Feel free to submit issues, fork the project to make it your own, or continue to build on this example!
+I was assisted by Claude Code Opus 4.5 for this implementation to speed up showing that you could message over Cloudflare Workers utilizing the Element Web and Element X App. Feel free to submit issues, fork the project to make it your own, or continue to build on this example!
 
 ## Live Demo
 
-A live instance is running at `m.easydemo.org`. You can verify federation compatibility using the [Matrix Federation Tester](https://federationtester.matrix.org/api/report?server_name=m.easydemo.org).
+A live instance is running at `m.easydemo.org`. You can verify federation compatibility using the [Matrix Federation Tester](https://federationtester.matrix.org/#m.easydemo.org) or view the [full JSON report](https://federationtester.matrix.org/api/report?server_name=m.easydemo.org).
 
 ## Quick Start
 
