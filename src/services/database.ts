@@ -1,6 +1,7 @@
 // Database service layer for D1
 
 import type { User, Device, Room, PDU, Membership, Env } from '../types';
+import { applyRedactionsToEvents } from './redaction';
 
 // User operations
 export async function createUser(
@@ -295,6 +296,63 @@ export async function storeEvent(db: D1Database, event: PDU): Promise<number> {
 export async function getEvent(db: D1Database, eventId: string): Promise<PDU | null> {
   const result = await db.prepare(
     `SELECT event_id, room_id, sender, event_type, state_key, content,
+     origin_server_ts, unsigned, depth, auth_events, prev_events, hashes, signatures,
+     redacted_because
+     FROM events WHERE event_id = ?`
+  ).bind(eventId).first<{
+    event_id: string;
+    room_id: string;
+    sender: string;
+    event_type: string;
+    state_key: string | null;
+    content: string;
+    origin_server_ts: number;
+    unsigned: string | null;
+    depth: number;
+    auth_events: string;
+    prev_events: string;
+    hashes: string | null;
+    signatures: string | null;
+    redacted_because: string | null;
+  }>();
+
+  if (!result) return null;
+
+  const event: PDU = {
+    event_id: result.event_id,
+    room_id: result.room_id,
+    sender: result.sender,
+    type: result.event_type,
+    state_key: result.state_key ?? undefined,
+    content: JSON.parse(result.content),
+    origin_server_ts: result.origin_server_ts,
+    unsigned: result.unsigned ? JSON.parse(result.unsigned) : undefined,
+    depth: result.depth,
+    auth_events: JSON.parse(result.auth_events),
+    prev_events: JSON.parse(result.prev_events),
+    hashes: result.hashes ? JSON.parse(result.hashes) : undefined,
+    signatures: result.signatures ? JSON.parse(result.signatures) : undefined,
+  };
+
+  // Apply redaction if the event was redacted
+  if (result.redacted_because) {
+    const [redactedEvent] = await applyRedactionsToEvents(
+      [{ event, redactedBecause: result.redacted_because }],
+      (id) => getEventRaw(db, id)
+    );
+    return redactedEvent;
+  }
+
+  return event;
+}
+
+/**
+ * Get an event without applying redaction (for internal use)
+ * This is used to fetch redaction events themselves
+ */
+export async function getEventRaw(db: D1Database, eventId: string): Promise<PDU | null> {
+  const result = await db.prepare(
+    `SELECT event_id, room_id, sender, event_type, state_key, content,
      origin_server_ts, unsigned, depth, auth_events, prev_events, hashes, signatures
      FROM events WHERE event_id = ?`
   ).bind(eventId).first<{
@@ -345,19 +403,31 @@ export async function getRoomEvents(
   if (direction === 'b') {
     // Backwards (newest first)
     if (fromToken) {
-      query = `SELECT * FROM events WHERE room_id = ? AND stream_ordering < ? ORDER BY stream_ordering DESC LIMIT ?`;
+      query = `SELECT event_id, room_id, sender, event_type, state_key, content,
+               origin_server_ts, unsigned, depth, auth_events, prev_events, stream_ordering,
+               redacted_because
+               FROM events WHERE room_id = ? AND stream_ordering < ? ORDER BY stream_ordering DESC LIMIT ?`;
       params.push(fromToken, limit);
     } else {
-      query = `SELECT * FROM events WHERE room_id = ? ORDER BY stream_ordering DESC LIMIT ?`;
+      query = `SELECT event_id, room_id, sender, event_type, state_key, content,
+               origin_server_ts, unsigned, depth, auth_events, prev_events, stream_ordering,
+               redacted_because
+               FROM events WHERE room_id = ? ORDER BY stream_ordering DESC LIMIT ?`;
       params.push(limit);
     }
   } else {
     // Forwards (oldest first)
     if (fromToken) {
-      query = `SELECT * FROM events WHERE room_id = ? AND stream_ordering > ? ORDER BY stream_ordering ASC LIMIT ?`;
+      query = `SELECT event_id, room_id, sender, event_type, state_key, content,
+               origin_server_ts, unsigned, depth, auth_events, prev_events, stream_ordering,
+               redacted_because
+               FROM events WHERE room_id = ? AND stream_ordering > ? ORDER BY stream_ordering ASC LIMIT ?`;
       params.push(fromToken, limit);
     } else {
-      query = `SELECT * FROM events WHERE room_id = ? ORDER BY stream_ordering ASC LIMIT ?`;
+      query = `SELECT event_id, room_id, sender, event_type, state_key, content,
+               origin_server_ts, unsigned, depth, auth_events, prev_events, stream_ordering,
+               redacted_because
+               FROM events WHERE room_id = ? ORDER BY stream_ordering ASC LIMIT ?`;
       params.push(limit);
     }
   }
@@ -375,21 +445,29 @@ export async function getRoomEvents(
     auth_events: string;
     prev_events: string;
     stream_ordering: number;
+    redacted_because: string | null;
   }>();
 
-  const events = result.results.map(r => ({
-    event_id: r.event_id,
-    room_id: r.room_id,
-    sender: r.sender,
-    type: r.event_type,
-    state_key: r.state_key ?? undefined,
-    content: JSON.parse(r.content),
-    origin_server_ts: r.origin_server_ts,
-    unsigned: r.unsigned ? JSON.parse(r.unsigned) : undefined,
-    depth: r.depth,
-    auth_events: JSON.parse(r.auth_events),
-    prev_events: JSON.parse(r.prev_events),
+  // Build events with their redaction status
+  const eventsWithRedaction = result.results.map(r => ({
+    event: {
+      event_id: r.event_id,
+      room_id: r.room_id,
+      sender: r.sender,
+      type: r.event_type,
+      state_key: r.state_key ?? undefined,
+      content: JSON.parse(r.content),
+      origin_server_ts: r.origin_server_ts,
+      unsigned: r.unsigned ? JSON.parse(r.unsigned) : undefined,
+      depth: r.depth,
+      auth_events: JSON.parse(r.auth_events),
+      prev_events: JSON.parse(r.prev_events),
+    } as PDU,
+    redactedBecause: r.redacted_because,
   }));
+
+  // Apply redactions
+  const events = await applyRedactionsToEvents(eventsWithRedaction, (id) => getEventRaw(db, id));
 
   const lastEvent = result.results[result.results.length - 1];
   const end = lastEvent?.stream_ordering ?? fromToken ?? 0;
@@ -404,7 +482,8 @@ export async function getRoomState(
 ): Promise<PDU[]> {
   const result = await db.prepare(
     `SELECT e.event_id, e.room_id, e.sender, e.event_type, e.state_key, e.content,
-     e.origin_server_ts, e.unsigned, e.depth, e.auth_events, e.prev_events
+     e.origin_server_ts, e.unsigned, e.depth, e.auth_events, e.prev_events,
+     e.redacted_because
      FROM room_state rs
      JOIN events e ON rs.event_id = e.event_id
      WHERE rs.room_id = ?`
@@ -420,21 +499,29 @@ export async function getRoomState(
     depth: number;
     auth_events: string;
     prev_events: string;
+    redacted_because: string | null;
   }>();
 
-  return result.results.map(r => ({
-    event_id: r.event_id,
-    room_id: r.room_id,
-    sender: r.sender,
-    type: r.event_type,
-    state_key: r.state_key ?? undefined,
-    content: JSON.parse(r.content),
-    origin_server_ts: r.origin_server_ts,
-    unsigned: r.unsigned ? JSON.parse(r.unsigned) : undefined,
-    depth: r.depth,
-    auth_events: JSON.parse(r.auth_events),
-    prev_events: JSON.parse(r.prev_events),
+  // Build events with their redaction status
+  const eventsWithRedaction = result.results.map(r => ({
+    event: {
+      event_id: r.event_id,
+      room_id: r.room_id,
+      sender: r.sender,
+      type: r.event_type,
+      state_key: r.state_key ?? undefined,
+      content: JSON.parse(r.content),
+      origin_server_ts: r.origin_server_ts,
+      unsigned: r.unsigned ? JSON.parse(r.unsigned) : undefined,
+      depth: r.depth,
+      auth_events: JSON.parse(r.auth_events),
+      prev_events: JSON.parse(r.prev_events),
+    } as PDU,
+    redactedBecause: r.redacted_because,
   }));
+
+  // Apply redactions
+  return applyRedactionsToEvents(eventsWithRedaction, (id) => getEventRaw(db, id));
 }
 
 export async function getStateEvent(
@@ -445,7 +532,8 @@ export async function getStateEvent(
 ): Promise<PDU | null> {
   const result = await db.prepare(
     `SELECT e.event_id, e.room_id, e.sender, e.event_type, e.state_key, e.content,
-     e.origin_server_ts, e.unsigned, e.depth, e.auth_events, e.prev_events
+     e.origin_server_ts, e.unsigned, e.depth, e.auth_events, e.prev_events,
+     e.redacted_because
      FROM room_state rs
      JOIN events e ON rs.event_id = e.event_id
      WHERE rs.room_id = ? AND rs.event_type = ? AND rs.state_key = ?`
@@ -461,11 +549,12 @@ export async function getStateEvent(
     depth: number;
     auth_events: string;
     prev_events: string;
+    redacted_because: string | null;
   }>();
 
   if (!result) return null;
 
-  return {
+  const event: PDU = {
     event_id: result.event_id,
     room_id: result.room_id,
     sender: result.sender,
@@ -478,6 +567,17 @@ export async function getStateEvent(
     auth_events: JSON.parse(result.auth_events),
     prev_events: JSON.parse(result.prev_events),
   };
+
+  // Apply redaction if the event was redacted
+  if (result.redacted_because) {
+    const [redactedEvent] = await applyRedactionsToEvents(
+      [{ event, redactedBecause: result.redacted_because }],
+      (id) => getEventRaw(db, id)
+    );
+    return redactedEvent;
+  }
+
+  return event;
 }
 
 // Membership operations
@@ -600,7 +700,7 @@ export async function getEventsSince(
 ): Promise<PDU[]> {
   const result = await db.prepare(
     `SELECT event_id, room_id, sender, event_type, state_key, content,
-     origin_server_ts, unsigned, depth, auth_events, prev_events
+     origin_server_ts, unsigned, depth, auth_events, prev_events, redacted_because
      FROM events
      WHERE room_id = ? AND stream_ordering > ?
      ORDER BY stream_ordering ASC
@@ -617,21 +717,29 @@ export async function getEventsSince(
     depth: number;
     auth_events: string;
     prev_events: string;
+    redacted_because: string | null;
   }>();
 
-  return result.results.map(r => ({
-    event_id: r.event_id,
-    room_id: r.room_id,
-    sender: r.sender,
-    type: r.event_type,
-    state_key: r.state_key ?? undefined,
-    content: JSON.parse(r.content),
-    origin_server_ts: r.origin_server_ts,
-    unsigned: r.unsigned ? JSON.parse(r.unsigned) : undefined,
-    depth: r.depth,
-    auth_events: JSON.parse(r.auth_events),
-    prev_events: JSON.parse(r.prev_events),
+  // Build events with their redaction status
+  const eventsWithRedaction = result.results.map(r => ({
+    event: {
+      event_id: r.event_id,
+      room_id: r.room_id,
+      sender: r.sender,
+      type: r.event_type,
+      state_key: r.state_key ?? undefined,
+      content: JSON.parse(r.content),
+      origin_server_ts: r.origin_server_ts,
+      unsigned: r.unsigned ? JSON.parse(r.unsigned) : undefined,
+      depth: r.depth,
+      auth_events: JSON.parse(r.auth_events),
+      prev_events: JSON.parse(r.prev_events),
+    } as PDU,
+    redactedBecause: r.redacted_because,
   }));
+
+  // Apply redactions
+  return applyRedactionsToEvents(eventsWithRedaction, (id) => getEventRaw(db, id));
 }
 
 // Notify all room members' SyncDurableObjects when a new event is stored
