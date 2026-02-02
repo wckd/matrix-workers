@@ -24,6 +24,7 @@ import {
   notifyUsersOfEvent,
 } from '../services/database';
 import type { JoinResult } from '../workflows';
+import { validateEventContent } from '../services/event-validation';
 
 const app = new Hono<AppEnv>();
 
@@ -777,6 +778,15 @@ app.put('/_matrix/client/v3/rooms/:roomId/state/:eventType/:stateKey?', requireA
     return Errors.badJson().toResponse();
   }
 
+  // Validate event content based on type
+  const contentValidation = validateEventContent(eventType, content);
+  if (!contentValidation.valid) {
+    return c.json(
+      { errcode: contentValidation.errcode || 'M_BAD_JSON', error: contentValidation.error },
+      400
+    );
+  }
+
   const eventId = await generateEventId(c.env.SERVER_NAME);
 
   const createEvent = await getStateEvent(c.env.DB, roomId, 'm.room.create');
@@ -965,6 +975,15 @@ app.put('/_matrix/client/v3/rooms/:roomId/send/:eventType/:txnId', requireAuth()
     content = await c.req.json();
   } catch {
     return Errors.badJson().toResponse();
+  }
+
+  // Validate event content based on type
+  const contentValidation = validateEventContent(eventType, content);
+  if (!contentValidation.valid) {
+    return c.json(
+      { errcode: contentValidation.errcode || 'M_BAD_JSON', error: contentValidation.error },
+      400
+    );
   }
 
   const eventId = await generateEventId(c.env.SERVER_NAME);
