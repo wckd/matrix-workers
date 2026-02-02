@@ -10,6 +10,58 @@ Feel free to submit issues, fork the project to make it your own, or continue to
 
 A live instance is running at `m.easydemo.org`. You can verify federation compatibility using the [Matrix Federation Tester](https://federationtester.matrix.org/api/report?server_name=m.easydemo.org).
 
+## Quick Start
+
+### One-Click Deploy
+
+The fastest way to deploy is using the Deploy to Cloudflare button at the top of this README. After clicking:
+
+1. Cloudflare provisions all resources automatically
+2. You need to update `SERVER_NAME` to your domain
+3. Run database migrations
+4. Configure your custom domain
+
+**See [DEPLOYMENT.md](./DEPLOYMENT.md) for complete instructions.**
+
+### Manual Deploy
+
+```bash
+# Clone and install
+git clone https://github.com/SilentHeroes/matrix-worker
+cd matrix-worker
+npm install
+
+# Create resources (save IDs from output)
+npx wrangler d1 create my-matrix-db
+npx wrangler kv namespace create SESSIONS
+npx wrangler kv namespace create DEVICE_KEYS
+npx wrangler kv namespace create ONE_TIME_KEYS
+npx wrangler kv namespace create CROSS_SIGNING_KEYS
+npx wrangler kv namespace create CACHE
+npx wrangler kv namespace create ACCOUNT_DATA
+npx wrangler r2 bucket create my-matrix-media
+
+# Update wrangler.jsonc with your resource IDs and SERVER_NAME
+# Then run migrations and deploy (see DEPLOYMENT.md for details)
+```
+
+**See [DEPLOYMENT.md](./DEPLOYMENT.md) for the complete step-by-step guide.**
+
+### Email Verification (Optional)
+
+For 3PID email verification support, configure [Resend](https://resend.com):
+
+```bash
+# Set your Resend API key
+npx wrangler secret put RESEND_API_KEY
+
+# Set the from email address (must match your verified domain)
+npx wrangler secret put EMAIL_FROM
+# Example: noreply@m.easydemo.org
+```
+
+> **Note:** Cloudflare's native [Email Workers](https://developers.cloudflare.com/email-routing/email-workers/send-email-workers/) currently only support sending to pre-verified destination addresses, making them unsuitable for verification emails to arbitrary users. Resend is used as a workaround until Cloudflare releases transactional email support for Workers.
+
 ## Spec Compliance
 
 **[Matrix Specification v1.17](https://spec.matrix.org/v1.17/) Compliance**
@@ -200,58 +252,6 @@ Access the admin dashboard at `/admin` on your server (e.g., `https://m.easydemo
 
 **Synapse API Compatibility:**
 Standard `/_synapse/admin/*` endpoints are available for compatibility with existing Matrix admin tools.
-
-## Quick Start
-
-### One-Click Deploy
-
-The fastest way to deploy is using the Deploy to Cloudflare button at the top of this README. After clicking:
-
-1. Cloudflare provisions all resources automatically
-2. You need to update `SERVER_NAME` to your domain
-3. Run database migrations
-4. Configure your custom domain
-
-**See [DEPLOYMENT.md](./DEPLOYMENT.md) for complete instructions.**
-
-### Manual Deploy
-
-```bash
-# Clone and install
-git clone https://github.com/SilentHeroes/matrix-worker
-cd matrix-worker
-npm install
-
-# Create resources (save IDs from output)
-npx wrangler d1 create my-matrix-db
-npx wrangler kv namespace create SESSIONS
-npx wrangler kv namespace create DEVICE_KEYS
-npx wrangler kv namespace create ONE_TIME_KEYS
-npx wrangler kv namespace create CROSS_SIGNING_KEYS
-npx wrangler kv namespace create CACHE
-npx wrangler kv namespace create ACCOUNT_DATA
-npx wrangler r2 bucket create my-matrix-media
-
-# Update wrangler.jsonc with your resource IDs and SERVER_NAME
-# Then run migrations and deploy (see DEPLOYMENT.md for details)
-```
-
-**See [DEPLOYMENT.md](./DEPLOYMENT.md) for the complete step-by-step guide.**
-
-### Email Verification (Optional)
-
-For 3PID email verification support, configure [Resend](https://resend.com):
-
-```bash
-# Set your Resend API key
-npx wrangler secret put RESEND_API_KEY
-
-# Set the from email address (must match your verified domain)
-npx wrangler secret put EMAIL_FROM
-# Example: noreply@m.easydemo.org
-```
-
-> **Note:** Cloudflare's native [Email Workers](https://developers.cloudflare.com/email-routing/email-workers/send-email-workers/) currently only support sending to pre-verified destination addresses, making them unsuitable for verification emails to arbitrary users. Resend is used as a workaround until Cloudflare releases transactional email support for Workers.
 
 ## Development
 

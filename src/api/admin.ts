@@ -414,6 +414,153 @@ app.delete('/admin/api/rooms/:roomId', requireAuth(), requireAdmin, async (c) =>
   return c.json({ success: true });
 });
 
+// GET /admin/api/federation/status - Get federation status
+app.get('/admin/api/federation/status', requireAuth(), requireAdmin, async (c) => {
+  const db = c.env.DB;
+  const serverName = c.env.SERVER_NAME;
+
+  // Get known servers count
+  const serversCount = await db.prepare('SELECT COUNT(*) as count FROM servers').first<{ count: number }>();
+
+  // Get signing key info
+  let signingKeyId = null;
+  try {
+    const keyData = await c.env.CACHE.get('server_signing_key');
+    if (keyData) {
+      const parsed = JSON.parse(keyData);
+      signingKeyId = parsed.keyId || `ed25519:${serverName.split('.')[0]}`;
+    }
+  } catch (e) {
+    // Key might not be cached
+  }
+
+  return c.json({
+    server_name: serverName,
+    federation_enabled: true,
+    signing_key_id: signingKeyId || `ed25519:a_${serverName.replace(/\./g, '_').substring(0, 4)}`,
+    known_servers_count: serversCount?.count || 0,
+  });
+});
+
+// GET /admin/api/federation/test - Run federation self-tests
+app.get('/admin/api/federation/test', requireAuth(), requireAdmin, async (c) => {
+  const serverName = c.env.SERVER_NAME;
+  const tests: Array<{ name: string; passed: boolean; message: string }> = [];
+
+  // Test 1: Check .well-known/matrix/server
+  try {
+    const wellKnownUrl = `https://${serverName}/.well-known/matrix/server`;
+    const resp = await fetch(wellKnownUrl);
+    if (resp.ok) {
+      const data = await resp.json() as any;
+      tests.push({
+        name: '.well-known/matrix/server',
+        passed: true,
+        message: `Delegates to ${data['m.server'] || serverName}`,
+      });
+    } else {
+      tests.push({
+        name: '.well-known/matrix/server',
+        passed: false,
+        message: `HTTP ${resp.status}`,
+      });
+    }
+  } catch (e: any) {
+    tests.push({
+      name: '.well-known/matrix/server',
+      passed: false,
+      message: e.message || 'Failed to fetch',
+    });
+  }
+
+  // Test 2: Check /_matrix/key/v2/server
+  try {
+    const keysUrl = `https://${serverName}/_matrix/key/v2/server`;
+    const resp = await fetch(keysUrl);
+    if (resp.ok) {
+      const data = await resp.json() as any;
+      const hasSigningKeys = data.verify_keys && Object.keys(data.verify_keys).length > 0;
+      tests.push({
+        name: 'Server signing keys',
+        passed: hasSigningKeys,
+        message: hasSigningKeys ? `${Object.keys(data.verify_keys).length} key(s) published` : 'No signing keys found',
+      });
+    } else {
+      tests.push({
+        name: 'Server signing keys',
+        passed: false,
+        message: `HTTP ${resp.status}`,
+      });
+    }
+  } catch (e: any) {
+    tests.push({
+      name: 'Server signing keys',
+      passed: false,
+      message: e.message || 'Failed to fetch',
+    });
+  }
+
+  // Test 3: Check /_matrix/federation/v1/version
+  try {
+    const versionUrl = `https://${serverName}/_matrix/federation/v1/version`;
+    const resp = await fetch(versionUrl);
+    if (resp.ok) {
+      const data = await resp.json() as any;
+      tests.push({
+        name: 'Federation API',
+        passed: true,
+        message: `Server: ${data.server?.name || 'Unknown'} ${data.server?.version || ''}`,
+      });
+    } else {
+      tests.push({
+        name: 'Federation API',
+        passed: false,
+        message: `HTTP ${resp.status}`,
+      });
+    }
+  } catch (e: any) {
+    tests.push({
+      name: 'Federation API',
+      passed: false,
+      message: e.message || 'Failed to fetch',
+    });
+  }
+
+  // Test 4: Check .well-known/matrix/client
+  try {
+    const clientWellKnown = `https://${serverName}/.well-known/matrix/client`;
+    const resp = await fetch(clientWellKnown);
+    if (resp.ok) {
+      const data = await resp.json() as any;
+      tests.push({
+        name: '.well-known/matrix/client',
+        passed: true,
+        message: `Homeserver: ${data['m.homeserver']?.base_url || 'configured'}`,
+      });
+    } else {
+      tests.push({
+        name: '.well-known/matrix/client',
+        passed: false,
+        message: `HTTP ${resp.status}`,
+      });
+    }
+  } catch (e: any) {
+    tests.push({
+      name: '.well-known/matrix/client',
+      passed: false,
+      message: e.message || 'Failed to fetch',
+    });
+  }
+
+  const allPassed = tests.every(t => t.passed);
+
+  return c.json({
+    success: allPassed,
+    server_name: serverName,
+    tests,
+  });
+});
+
 // GET /admin/api/federation/servers - List known federation servers
 app.get('/admin/api/federation/servers', requireAuth(), requireAdmin, async (c) => {
   const db = c.env.DB;

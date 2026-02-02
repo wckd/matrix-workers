@@ -1820,6 +1820,29 @@ export const adminDashboardHtml = (serverName: string) => `
       <section id="page-federation" class="page hidden">
         <div class="header">
           <h2>Federation</h2>
+          <button class="btn btn-primary" onclick="testFederation()">Test Federation</button>
+        </div>
+
+        <!-- Federation Status Card -->
+        <div class="card" style="margin-bottom: 20px;">
+          <div class="card-header">
+            <h3>Federation Status</h3>
+          </div>
+          <div class="card-body" id="federationStatus">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <div class="spinner"></div>
+              <span>Checking federation status...</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Federation Test Results -->
+        <div class="card hidden" id="federationTestCard" style="margin-bottom: 20px;">
+          <div class="card-header">
+            <h3>Federation Test Results</h3>
+          </div>
+          <div class="card-body" id="federationTestResults">
+          </div>
         </div>
 
         <div class="card">
@@ -3422,6 +3445,10 @@ export const adminDashboardHtml = (serverName: string) => `
     // Federation
     async function loadFederation() {
       try {
+        // Load federation status
+        loadFederationStatus();
+        
+        // Load known servers
         const data = await api('/admin/api/federation/servers');
         const tbody = document.getElementById('federationTable');
         if (data.servers.length === 0) {
@@ -3437,6 +3464,93 @@ export const adminDashboardHtml = (serverName: string) => `
         }
       } catch (err) {
         console.error('Failed to load federation:', err);
+      }
+    }
+
+    async function loadFederationStatus() {
+      const statusDiv = document.getElementById('federationStatus');
+      try {
+        const data = await api('/admin/api/federation/status');
+        
+        const statusHtml = \`
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">
+            <div>
+              <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Server Name</div>
+              <div style="font-size: 16px; font-weight: 500;">\${escapeHtml(data.server_name)}</div>
+            </div>
+            <div>
+              <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Federation Status</div>
+              <div><span class="badge \${data.federation_enabled ? 'badge-success' : 'badge-danger'}">\${data.federation_enabled ? 'Enabled' : 'Disabled'}</span></div>
+            </div>
+            <div>
+              <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Signing Key</div>
+              <div style="font-size: 13px; font-family: monospace;">\${escapeHtml(data.signing_key_id || 'Not configured')}</div>
+            </div>
+            <div>
+              <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Known Servers</div>
+              <div style="font-size: 16px; font-weight: 500;">\${data.known_servers_count}</div>
+            </div>
+          </div>
+          <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border-color);">
+            <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">Federation Test URL</div>
+            <a href="https://federationtester.matrix.org/#\${encodeURIComponent(data.server_name)}" target="_blank" style="color: var(--primary); text-decoration: none; font-size: 13px;">
+              federationtester.matrix.org/#\${escapeHtml(data.server_name)} ↗
+            </a>
+          </div>
+        \`;
+        
+        statusDiv.innerHTML = statusHtml;
+      } catch (err) {
+        console.error('Failed to load federation status:', err);
+        statusDiv.innerHTML = '<div style="color: var(--danger);">Failed to load federation status</div>';
+      }
+    }
+
+    async function testFederation() {
+      const testCard = document.getElementById('federationTestCard');
+      const resultsDiv = document.getElementById('federationTestResults');
+      
+      testCard.classList.remove('hidden');
+      resultsDiv.innerHTML = \`
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div class="spinner"></div>
+          <span>Running federation tests...</span>
+        </div>
+      \`;
+      
+      try {
+        const data = await api('/admin/api/federation/test');
+        
+        const resultsHtml = \`
+          <div style="margin-bottom: 15px;">
+            <span class="badge \${data.success ? 'badge-success' : 'badge-danger'}" style="font-size: 14px; padding: 6px 12px;">
+              \${data.success ? 'All Tests Passed' : 'Some Tests Failed'}
+            </span>
+          </div>
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Test</th>
+                <th>Result</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+            <tbody>
+              \${data.tests.map(t => \`
+                <tr>
+                  <td>\${escapeHtml(t.name)}</td>
+                  <td><span class="badge \${t.passed ? 'badge-success' : 'badge-danger'}">\${t.passed ? 'Passed' : 'Failed'}</span></td>
+                  <td style="font-size: 12px; color: var(--text-secondary);">\${escapeHtml(t.message || '')}</td>
+                </tr>
+              \`).join('')}
+            </tbody>
+          </table>
+        \`;
+        
+        resultsDiv.innerHTML = resultsHtml;
+      } catch (err) {
+        console.error('Federation test failed:', err);
+        resultsDiv.innerHTML = '<div style="color: var(--danger);">Failed to run federation tests: ' + escapeHtml(err.message || 'Unknown error') + '</div>';
       }
     }
 
