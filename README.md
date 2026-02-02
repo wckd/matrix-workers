@@ -345,6 +345,19 @@ npm run test
 npm run db:migrate:local
 ```
 
+## Testing
+
+Unit tests for core Matrix functionality using Vitest:
+
+| Test File | Tests | Coverage |
+|-----------|-------|----------|
+| `event-validation.test.ts` | 25 | Matrix ID validation, event fields, PDU fields, state events |
+| `redaction.test.ts` | 12 | Content stripping per event type, redacted event structure |
+| `history-visibility.test.ts` | 17 | world_readable, shared, invited, joined visibility rules |
+| `uia.test.ts` | 14 | UIA session completion, response building, standard flows |
+
+**Total: 68 tests**
+
 ## Cloudflare Bindings
 
 | Binding | Type | Purpose |
