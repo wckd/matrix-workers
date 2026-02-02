@@ -28,7 +28,8 @@ import { getVisibilityContext, filterEventsByVisibility } from '../services/hist
 import type { JoinResult } from '../workflows';
 import { validateEventContent } from '../services/event-validation';
 import { canSendStateEvent, canModifyPowerLevels } from '../services/power-levels';
-import type { RoomPowerLevelsContent } from '../types/matrix';
+import { checkRestrictedJoinAllowed } from '../services/authorization';
+import type { RoomPowerLevelsContent, RoomJoinRulesContent } from '../types/matrix';
 
 const app = new Hono<AppEnv>();
 
@@ -431,10 +432,13 @@ app.post('/_matrix/client/v3/rooms/:roomId/join', requireAuth(), async (c) => {
 
   // Check join rules
   const joinRulesEvent = await getStateEvent(c.env.DB, roomId, 'm.room.join_rules');
-  const joinRule = (joinRulesEvent?.content as any)?.join_rule || 'invite';
+  const joinRulesContent = joinRulesEvent?.content as RoomJoinRulesContent | undefined;
+  const joinRule = joinRulesContent?.join_rule || 'invite';
 
   // Determine if user can join
   let canJoin = false;
+  let authorisingUser: string | undefined;
+
   if (joinRule === 'public') {
     canJoin = true;
   } else if (currentMembership?.membership === 'invite') {
@@ -442,6 +446,29 @@ app.post('/_matrix/client/v3/rooms/:roomId/join', requireAuth(), async (c) => {
   } else if (currentMembership?.membership === 'join') {
     // Already joined
     return c.json({ room_id: roomId });
+  } else if (joinRule === 'restricted' || joinRule === 'knock_restricted') {
+    // Check if user can join via restricted rules
+    const allowList = joinRulesContent?.allow || [];
+    const restrictedResult = await checkRestrictedJoinAllowed(
+      c.env.DB,
+      userId,
+      roomId,
+      allowList,
+      c.env.SERVER_NAME
+    );
+
+    if (restrictedResult.allowed) {
+      canJoin = true;
+      authorisingUser = restrictedResult.authorisingUser;
+
+      if (!authorisingUser) {
+        // No local authorising user found - for local rooms this shouldn't happen
+        // unless the room has no local users with invite power
+        return Errors.forbidden('No authorising user available for restricted join').toResponse();
+      }
+    } else {
+      return Errors.forbidden(restrictedResult.reason || 'Cannot join restricted room').toResponse();
+    }
   }
 
   if (!canJoin) {
@@ -468,6 +495,11 @@ app.post('/_matrix/client/v3/rooms/:roomId/join', requireAuth(), async (c) => {
   const memberContent: RoomMemberContent = {
     membership: 'join',
   };
+
+  // Add authorising user for restricted joins
+  if (authorisingUser) {
+    memberContent.join_authorised_via_users_server = authorisingUser;
+  }
 
   const event: PDU = {
     event_id: eventId,

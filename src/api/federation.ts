@@ -12,7 +12,9 @@ import {
   buildAuthStateFromEvents,
   validateAuthChain,
   validateSendJoinAuthChain,
+  checkRestrictedJoinAllowed,
 } from '../services/authorization';
+import type { RoomJoinRulesContent } from '../types/matrix';
 import { validatePdu } from '../services/event-validation';
 import { resolveStateWithNewEvent } from '../services/state-resolution';
 import { storeEvent, getRoomState } from '../services/database';
@@ -1246,11 +1248,11 @@ app.get('/_matrix/federation/v1/make_join/:roomId/:userId', async (c) => {
      WHERE rs.room_id = ? AND rs.event_type = 'm.room.create'`
   ).bind(roomId).first<{ event_id: string }>();
 
-  const joinRulesEvent = await c.env.DB.prepare(
-    `SELECT e.event_id FROM room_state rs
+  const joinRulesRow = await c.env.DB.prepare(
+    `SELECT e.event_id, e.content FROM room_state rs
      JOIN events e ON rs.event_id = e.event_id
      WHERE rs.room_id = ? AND rs.event_type = 'm.room.join_rules'`
-  ).bind(roomId).first<{ event_id: string }>();
+  ).bind(roomId).first<{ event_id: string; content: string }>();
 
   const powerLevelsEvent = await c.env.DB.prepare(
     `SELECT e.event_id FROM room_state rs
@@ -1258,9 +1260,49 @@ app.get('/_matrix/federation/v1/make_join/:roomId/:userId', async (c) => {
      WHERE rs.room_id = ? AND rs.event_type = 'm.room.power_levels'`
   ).bind(roomId).first<{ event_id: string }>();
 
+  // Check join rules
+  let joinRulesContent: RoomJoinRulesContent | null = null;
+  if (joinRulesRow) {
+    try {
+      joinRulesContent = JSON.parse(joinRulesRow.content);
+    } catch {
+      // Use default
+    }
+  }
+  const joinRule = joinRulesContent?.join_rule || 'invite';
+
+  // Check if user is already invited (allows join for any join_rule)
+  const existingMembership = await c.env.DB.prepare(
+    `SELECT membership FROM room_memberships WHERE room_id = ? AND user_id = ?`
+  ).bind(roomId, userId).first<{ membership: string }>();
+
+  const isInvited = existingMembership?.membership === 'invite';
+
+  // For restricted rooms, check the allow list
+  let authorisingUser: string | undefined;
+  if ((joinRule === 'restricted' || joinRule === 'knock_restricted') && !isInvited) {
+    const allowList = joinRulesContent?.allow || [];
+    const restrictedResult = await checkRestrictedJoinAllowed(
+      c.env.DB,
+      userId,
+      roomId,
+      allowList,
+      c.env.SERVER_NAME
+    );
+
+    if (!restrictedResult.allowed) {
+      return Errors.forbidden(restrictedResult.reason || 'User not allowed to join restricted room').toResponse();
+    }
+
+    authorisingUser = restrictedResult.authorisingUser;
+  } else if (joinRule === 'invite' && !isInvited) {
+    return Errors.forbidden('Room requires invite to join').toResponse();
+  }
+  // public rooms allow anyone
+
   const authEvents: string[] = [];
   if (createEvent) authEvents.push(createEvent.event_id);
-  if (joinRulesEvent) authEvents.push(joinRulesEvent.event_id);
+  if (joinRulesRow) authEvents.push(joinRulesRow.event_id);
   if (powerLevelsEvent) authEvents.push(powerLevelsEvent.event_id);
 
   // Get latest event for prev_events
@@ -1271,15 +1313,23 @@ app.get('/_matrix/federation/v1/make_join/:roomId/:userId', async (c) => {
   const prevEvents = latestEvent ? [latestEvent.event_id] : [];
   const depth = (latestEvent?.depth || 0) + 1;
 
+  // Build member content
+  const memberContent: { membership: string; join_authorised_via_users_server?: string } = {
+    membership: 'join',
+  };
+
+  // Add authorising user for restricted joins
+  if (authorisingUser) {
+    memberContent.join_authorised_via_users_server = authorisingUser;
+  }
+
   // Create unsigned join event template
   const eventTemplate = {
     room_id: roomId,
     sender: userId,
     type: 'm.room.member',
     state_key: userId,
-    content: {
-      membership: 'join',
-    },
+    content: memberContent,
     origin_server_ts: Date.now(),
     depth,
     auth_events: authEvents,
