@@ -1,6 +1,6 @@
 # Matrix Homeserver on Cloudflare Workers
 
-[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/SilentHeroes/matrix-worker)
+[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/wckd/matrix-workers)
 
 This is a proof of concept Matrix homeserver implementation running entirely on Cloudflare's edge infrastructure. This was built to prove E2EE utilizing Matrix protocols over Element X on the Cloudflare Workers Platform. It is meant to serve as an example prototype and not endorsed as ready for production at this point.
 
@@ -27,8 +27,8 @@ The fastest way to deploy is using the Deploy to Cloudflare button at the top of
 
 ```bash
 # Clone and install
-git clone https://github.com/SilentHeroes/matrix-worker
-cd matrix-worker
+git clone https://github.com/wckd/matrix-workers
+cd matrix-workers
 npm install
 
 # Create resources (save IDs from output)
