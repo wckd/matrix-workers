@@ -5,6 +5,12 @@ import type { AppEnv, PDU } from '../types';
 import { Errors } from '../utils/errors';
 import { generateSigningKeyPair, signJson } from '../utils/crypto';
 import { verifyPduSignature } from '../services/federation-keys';
+import {
+  checkEventAuthorization,
+  fetchRoomAuthState,
+  buildAuthStateFromEvents,
+  validateAuthChain,
+} from '../services/authorization';
 
 const app = new Hono<AppEnv>();
 
@@ -149,7 +155,38 @@ app.put('/_matrix/federation/v1/send/:txnId', async (c) => {
         }
       }
 
-      // TODO: Additional validation (auth rules, state resolution) will be added in later phases
+      // Fetch auth events referenced by this PDU
+      const authEvents = await fetchAuthEvents(c.env.DB, pdu.auth_events || []);
+
+      // Validate auth chain completeness
+      const chainResult = await validateAuthChain(c.env.DB, pdu, authEvents);
+      if (!chainResult.authorized) {
+        if (enforcement === 'enforce') {
+          pduResults[pdu.event_id] = { error: chainResult.reason || 'Invalid auth chain' };
+          continue;
+        } else {
+          console.warn(
+            `[AUTH_CHAIN] Invalid auth chain for PDU ${pdu.event_id}: ${chainResult.reason}`
+          );
+        }
+      }
+
+      // Build auth state from auth events and check authorization
+      const authState = buildAuthStateFromEvents(authEvents);
+      const authResult = await checkEventAuthorization(pdu, authState);
+
+      if (!authResult.authorized) {
+        if (enforcement === 'enforce') {
+          pduResults[pdu.event_id] = { error: authResult.reason || 'Not authorized' };
+          continue;
+        } else {
+          console.warn(
+            `[AUTHORIZATION] PDU ${pdu.event_id} not authorized: ${authResult.reason}`
+          );
+        }
+      }
+
+      // TODO: State resolution will be added in Phase 7
       pduResults[pdu.event_id] = {};
     } catch (e: any) {
       pduResults[pdu.event_id] = {
@@ -176,6 +213,49 @@ function extractServerName(userId: string): string | null {
     return null;
   }
   return userId.slice(colonIndex + 1);
+}
+
+/**
+ * Fetch auth events from database by their event IDs
+ */
+async function fetchAuthEvents(db: D1Database, eventIds: string[]): Promise<PDU[]> {
+  if (eventIds.length === 0) {
+    return [];
+  }
+
+  const placeholders = eventIds.map(() => '?').join(', ');
+  const result = await db
+    .prepare(
+      `SELECT event_id, room_id, sender, event_type, state_key, content,
+              origin_server_ts, depth, auth_events, prev_events
+       FROM events WHERE event_id IN (${placeholders})`
+    )
+    .bind(...eventIds)
+    .all<{
+      event_id: string;
+      room_id: string;
+      sender: string;
+      event_type: string;
+      state_key: string | null;
+      content: string;
+      origin_server_ts: number;
+      depth: number;
+      auth_events: string;
+      prev_events: string;
+    }>();
+
+  return result.results.map((row) => ({
+    event_id: row.event_id,
+    room_id: row.room_id,
+    sender: row.sender,
+    type: row.event_type,
+    state_key: row.state_key ?? undefined,
+    content: JSON.parse(row.content),
+    origin_server_ts: row.origin_server_ts,
+    depth: row.depth,
+    auth_events: JSON.parse(row.auth_events),
+    prev_events: JSON.parse(row.prev_events),
+  }));
 }
 
 // GET /_matrix/federation/v1/event/:eventId - Get a single event
@@ -371,34 +451,123 @@ app.get('/_matrix/federation/v1/make_join/:roomId/:userId', async (c) => {
 // PUT /_matrix/federation/v1/send_join/:roomId/:eventId - Complete join
 app.put('/_matrix/federation/v1/send_join/:roomId/:eventId', async (c) => {
   const roomId = c.req.param('roomId');
-  // Note: eventId should be validated against the submitted event
-  void c.req.param('eventId');
+  const eventId = c.req.param('eventId');
+  const enforcement = getSignatureEnforcement(c.env);
 
-  let body: any;
+  let joinEvent: PDU;
   try {
-    body = await c.req.json();
+    joinEvent = await c.req.json();
   } catch {
     return Errors.badJson().toResponse();
   }
 
+  // Validate event ID matches
+  if (joinEvent.event_id !== eventId) {
+    return Errors.invalidParam('Event ID mismatch').toResponse();
+  }
+
+  // Validate room ID matches
+  if (joinEvent.room_id !== roomId) {
+    return Errors.invalidParam('Room ID mismatch').toResponse();
+  }
+
+  // Validate it's a join event
+  if (joinEvent.type !== 'm.room.member') {
+    return Errors.invalidParam('Expected m.room.member event').toResponse();
+  }
+
+  const content = joinEvent.content as { membership?: string };
+  if (content.membership !== 'join') {
+    return Errors.invalidParam('Expected join membership').toResponse();
+  }
+
+  // Verify signature from the joining server
+  const joiningServer = extractServerName(joinEvent.sender);
+  if (!joiningServer) {
+    return Errors.invalidParam('Invalid sender').toResponse();
+  }
+
+  const sigResult = await verifyPduSignature(c.env, joinEvent as unknown as Record<string, unknown>, joiningServer);
+  if (!sigResult.valid) {
+    if (enforcement === 'enforce') {
+      return Errors.unauthorized(sigResult.error || 'Invalid signature').toResponse();
+    } else {
+      console.warn(`[SEND_JOIN] Invalid signature from ${joiningServer}: ${sigResult.error}`);
+    }
+  }
+
+  // Fetch current room auth state
+  const authState = await fetchRoomAuthState(c.env.DB, roomId);
+
+  if (!authState.createEvent) {
+    return Errors.notFound('Room not found').toResponse();
+  }
+
+  // Check authorization
+  const authResult = await checkEventAuthorization(joinEvent, authState);
+  if (!authResult.authorized) {
+    if (enforcement === 'enforce') {
+      return Errors.forbidden(authResult.reason || 'Join not authorized').toResponse();
+    } else {
+      console.warn(`[SEND_JOIN] Join not authorized: ${authResult.reason}`);
+    }
+  }
+
   // Get current state and auth chain
   const stateEvents = await c.env.DB.prepare(
-    `SELECT e.* FROM room_state rs
+    `SELECT e.event_id, e.room_id, e.sender, e.event_type, e.state_key, e.content,
+            e.origin_server_ts, e.depth, e.auth_events, e.prev_events, e.hashes, e.signatures
+     FROM room_state rs
      JOIN events e ON rs.event_id = e.event_id
      WHERE rs.room_id = ?`
-  ).bind(roomId).all();
+  ).bind(roomId).all<{
+    event_id: string;
+    room_id: string;
+    sender: string;
+    event_type: string;
+    state_key: string | null;
+    content: string;
+    origin_server_ts: number;
+    depth: number;
+    auth_events: string;
+    prev_events: string;
+    hashes: string | null;
+    signatures: string | null;
+  }>();
+
+  // Build auth chain from state events' auth_events
+  const authEventIds = new Set<string>();
+  for (const e of stateEvents.results) {
+    const authEvents = JSON.parse(e.auth_events) as string[];
+    for (const id of authEvents) {
+      authEventIds.add(id);
+    }
+  }
+
+  const authChain = await fetchAuthEvents(c.env.DB, Array.from(authEventIds));
 
   return c.json({
     origin: c.env.SERVER_NAME,
-    auth_chain: [],
-    state: stateEvents.results.map((e: any) => ({
+    auth_chain: authChain.map((e) => ({
       ...e,
+      signatures: e.signatures || {},
+      hashes: e.hashes || {},
+    })),
+    state: stateEvents.results.map((e) => ({
+      event_id: e.event_id,
+      room_id: e.room_id,
+      sender: e.sender,
       type: e.event_type,
+      state_key: e.state_key ?? undefined,
       content: JSON.parse(e.content),
+      origin_server_ts: e.origin_server_ts,
+      depth: e.depth,
       auth_events: JSON.parse(e.auth_events),
       prev_events: JSON.parse(e.prev_events),
+      hashes: e.hashes ? JSON.parse(e.hashes) : {},
+      signatures: e.signatures ? JSON.parse(e.signatures) : {},
     })),
-    event: body,
+    event: joinEvent,
   });
 });
 
