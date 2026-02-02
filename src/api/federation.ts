@@ -11,6 +11,7 @@ import {
   buildAuthStateFromEvents,
   validateAuthChain,
 } from '../services/authorization';
+import { validatePdu } from '../services/event-validation';
 
 const app = new Hono<AppEnv>();
 
@@ -137,6 +138,13 @@ app.put('/_matrix/federation/v1/send/:txnId', async (c) => {
 
       if (!pduOrigin) {
         pduResults[pdu.event_id] = { error: 'Cannot determine origin server' };
+        continue;
+      }
+
+      // Validate PDU structure and fields
+      const validationResult = validatePdu(pdu);
+      if (!validationResult.valid) {
+        pduResults[pdu.event_id] = { error: validationResult.error };
         continue;
       }
 
