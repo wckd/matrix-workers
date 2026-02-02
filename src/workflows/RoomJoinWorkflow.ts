@@ -17,6 +17,7 @@ import {
   getRoomEvents,
   getMembership,
 } from '../services/database';
+import { FederationClient } from '../services/federation-client';
 
 // Parameters passed when triggering the workflow
 export interface JoinParams {
@@ -148,22 +149,16 @@ export class RoomJoinWorkflow extends WorkflowEntrypoint<Env, JoinParams> {
   ): Promise<{ room_version: string; event: any }> {
     console.log('[RoomJoinWorkflow] Making make_join request', { remoteServer, roomId, userId });
 
-    const url = `https://${remoteServer}/_matrix/federation/v1/make_join/${encodeURIComponent(roomId)}/${encodeURIComponent(userId)}`;
+    const client = new FederationClient(this.env);
+    const path = `/_matrix/federation/v1/make_join/${encodeURIComponent(roomId)}/${encodeURIComponent(userId)}`;
 
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
+    const response = await client.get<{ room_version: string; event: any }>(remoteServer, path);
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`make_join failed: ${response.status} ${error}`);
+    if (!response.ok || !response.data) {
+      throw new Error(`make_join failed: ${response.error || 'Unknown error'}`);
     }
 
-    const result = await response.json() as { room_version: string; event: any };
-    return result;
+    return response.data;
   }
 
   // Create a join event (either from remote template or local state)
@@ -232,7 +227,11 @@ export class RoomJoinWorkflow extends WorkflowEntrypoint<Env, JoinParams> {
       prev_events: prevEvents,
     };
 
-    return event;
+    // Sign the event
+    const client = new FederationClient(this.env);
+    const signedEvent = await client.signEvent(event as unknown as Record<string, unknown>);
+
+    return signedEvent as unknown as SerializableEvent;
   }
 
   // Send a send_join request to a remote server
@@ -243,23 +242,20 @@ export class RoomJoinWorkflow extends WorkflowEntrypoint<Env, JoinParams> {
   ): Promise<any> {
     console.log('[RoomJoinWorkflow] Sending send_join request', { remoteServer, roomId, eventId: joinEvent.event_id });
 
-    const url = `https://${remoteServer}/_matrix/federation/v1/send_join/${encodeURIComponent(roomId)}/${encodeURIComponent(joinEvent.event_id)}`;
+    const client = new FederationClient(this.env);
+    const path = `/_matrix/federation/v1/send_join/${encodeURIComponent(roomId)}/${encodeURIComponent(joinEvent.event_id)}`;
 
-    const response = await fetch(url, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(joinEvent),
-    });
+    const response = await client.put(
+      remoteServer,
+      path,
+      joinEvent as unknown as Record<string, unknown>
+    );
 
     if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`send_join failed: ${response.status} ${error}`);
+      throw new Error(`send_join failed: ${response.error || 'Unknown error'}`);
     }
 
-    const result = await response.json();
-    return result;
+    return response.data;
   }
 
   // Notify a batch of members about the join

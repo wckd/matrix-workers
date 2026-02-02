@@ -352,3 +352,119 @@ export function generateRandomString(length: number = 32): string {
   const bytes = crypto.getRandomValues(new Uint8Array(length));
   return Array.from(bytes).map(b => chars[b % chars.length]).join('');
 }
+
+// ============================================================================
+// Federation Request Signing
+// ============================================================================
+
+/**
+ * Sign a federation request per Matrix spec
+ * https://spec.matrix.org/v1.12/server-server-api/#request-authentication
+ *
+ * @param method - HTTP method (GET, PUT, POST, etc.)
+ * @param uri - Request URI path (e.g., /_matrix/federation/v1/send/123)
+ * @param origin - Origin server name (this server)
+ * @param destination - Destination server name
+ * @param keyId - Key ID (e.g., "ed25519:abc123")
+ * @param privateKey - Private key as unpadded Base64 (PKCS8 format)
+ * @param content - Optional request body (for PUT/POST)
+ * @returns Authorization header value
+ */
+export async function signFederationRequest(
+  method: string,
+  uri: string,
+  origin: string,
+  destination: string,
+  keyId: string,
+  privateKey: string,
+  content?: Record<string, unknown>
+): Promise<string> {
+  // Build the object to sign
+  const requestObject: Record<string, unknown> = {
+    method: method.toUpperCase(),
+    uri,
+    origin,
+    destination,
+  };
+
+  // Include content for requests with body
+  if (content !== undefined) {
+    requestObject.content = content;
+  }
+
+  // Get canonical JSON and sign
+  const canonical = canonicalJson(requestObject);
+  const encoder = new TextEncoder();
+  const data = encoder.encode(canonical);
+  const signature = await signEd25519(data, privateKey);
+
+  // Build Authorization header
+  // Format: X-Matrix origin="${origin}",destination="${destination}",key="${keyId}",sig="${signature}"
+  return `X-Matrix origin="${origin}",destination="${destination}",key="${keyId}",sig="${signature}"`;
+}
+
+/**
+ * Parse an X-Matrix Authorization header
+ * @returns Parsed components or null if invalid
+ */
+export function parseAuthorizationHeader(
+  header: string
+): { origin: string; destination: string; keyId: string; signature: string } | null {
+  if (!header.startsWith('X-Matrix ')) {
+    return null;
+  }
+
+  const params = header.slice(9); // Remove "X-Matrix "
+  const result: Record<string, string> = {};
+
+  // Parse key="value" pairs
+  const regex = /(\w+)="([^"]+)"/g;
+  let match;
+  while ((match = regex.exec(params)) !== null) {
+    result[match[1]] = match[2];
+  }
+
+  if (!result.origin || !result.destination || !result.key || !result.sig) {
+    return null;
+  }
+
+  return {
+    origin: result.origin,
+    destination: result.destination,
+    keyId: result.key,
+    signature: result.sig,
+  };
+}
+
+/**
+ * Verify a federation request signature
+ */
+export async function verifyFederationRequest(
+  method: string,
+  uri: string,
+  origin: string,
+  destination: string,
+  _keyId: string,
+  signature: string,
+  publicKey: string,
+  content?: Record<string, unknown>
+): Promise<boolean> {
+  // Build the object that was signed
+  const requestObject: Record<string, unknown> = {
+    method: method.toUpperCase(),
+    uri,
+    origin,
+    destination,
+  };
+
+  if (content !== undefined) {
+    requestObject.content = content;
+  }
+
+  // Get canonical JSON and verify
+  const canonical = canonicalJson(requestObject);
+  const encoder = new TextEncoder();
+  const data = encoder.encode(canonical);
+
+  return verifyEd25519(data, signature, publicKey);
+}
