@@ -126,7 +126,7 @@ These features protect against malicious federation servers and ensure cryptogra
 
 **Medium Priority**
 
-- **#5: Room Alias Deletion Permissions** ([`src/api/directory.ts`](src/api/directory.ts)) - Enforces creator/admin permissions on room alias deletion.
+- **#5: Room Alias Deletion Permissions** ([`src/api/aliases.ts`](src/api/aliases.ts)) - Enforces creator/admin permissions on room alias deletion.
 
 ### Implementation Details
 
