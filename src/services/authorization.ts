@@ -182,8 +182,34 @@ function checkJoin(
     if (targetMembership === 'invite' || targetMembership === 'join') {
       return { authorized: true };
     }
-    // TODO: Check allow list for restricted joins
-    return { authorized: false, reason: 'Room is restricted' };
+
+    // For restricted joins, check join_authorised_via_users_server
+    const content = event.content as RoomMemberContent;
+    const authorisingUser = content.join_authorised_via_users_server;
+
+    if (!authorisingUser) {
+      return { authorized: false, reason: 'Restricted room join requires join_authorised_via_users_server' };
+    }
+
+    // The authorising user must be a joined member of the room with invite power
+    const authorisingMembership = getTargetMembership(authorisingUser, authState);
+    if (authorisingMembership !== 'join') {
+      return { authorized: false, reason: 'Authorising user is not a member of the room' };
+    }
+
+    // Check authorising user has invite power level
+    const authorisingPowerLevel = getUserPowerLevel(authorisingUser, authState);
+    const invitePowerLevel = getInvitePowerLevel(authState);
+    if (authorisingPowerLevel < invitePowerLevel) {
+      return { authorized: false, reason: 'Authorising user does not have invite power' };
+    }
+
+    // Note: The caller should also verify:
+    // 1. The event is signed by the authorising user's server
+    // 2. The joining user is a member of a room in the allow list
+    // These checks require database access and are done in the federation layer
+
+    return { authorized: true };
   }
 
   return { authorized: false, reason: 'Join not allowed by room rules' };
@@ -792,4 +818,122 @@ export async function validateSendJoinAuthChain(
   }
 
   return { authorized: true };
+}
+
+/**
+ * Get the allow list from join rules
+ */
+export function getJoinRulesAllowList(authState: RoomAuthState): Array<{ type: string; room_id?: string }> {
+  if (!authState.joinRulesEvent) return [];
+  const content = authState.joinRulesEvent.content as unknown as RoomJoinRulesContent;
+  return content.allow || [];
+}
+
+/**
+ * Result of checking if a user can join via restricted rules
+ */
+export interface RestrictedJoinResult {
+  allowed: boolean;
+  reason?: string;
+  /** User ID of a local user who can authorize the join */
+  authorisingUser?: string;
+  /** Room ID that the user is a member of from the allow list */
+  allowedViaRoom?: string;
+}
+
+/**
+ * Check if a user can join a room via restricted join rules.
+ * Returns the authorising user if found.
+ *
+ * @param db Database connection
+ * @param joiningUserId User trying to join
+ * @param targetRoomId Room they're trying to join
+ * @param allowList The allow array from join_rules
+ * @param localServerName The local server name (to find local authorising users)
+ */
+export async function checkRestrictedJoinAllowed(
+  db: D1Database,
+  joiningUserId: string,
+  targetRoomId: string,
+  allowList: Array<{ type: string; room_id?: string }>,
+  localServerName: string
+): Promise<RestrictedJoinResult> {
+  if (!allowList || allowList.length === 0) {
+    return { allowed: false, reason: 'No rooms in allow list' };
+  }
+
+  // Get room IDs from allow list (only m.room_membership type is supported)
+  const allowedRoomIds = allowList
+    .filter(entry => entry.type === 'm.room_membership' && entry.room_id)
+    .map(entry => entry.room_id!);
+
+  if (allowedRoomIds.length === 0) {
+    return { allowed: false, reason: 'No valid room entries in allow list' };
+  }
+
+  // Check if joining user is a member of any allowed room
+  const placeholders = allowedRoomIds.map(() => '?').join(', ');
+  const joiningUserMemberships = await db.prepare(
+    `SELECT room_id FROM room_memberships
+     WHERE user_id = ? AND membership = 'join' AND room_id IN (${placeholders})`
+  ).bind(joiningUserId, ...allowedRoomIds).all<{ room_id: string }>();
+
+  if (joiningUserMemberships.results.length === 0) {
+    return { allowed: false, reason: 'User is not a member of any room in the allow list' };
+  }
+
+  const allowedViaRoom = joiningUserMemberships.results[0].room_id;
+
+  // Find a local user in the target room who:
+  // 1. Is a joined member of the target room
+  // 2. Has invite power level
+  // 3. Is from the local server
+
+  // Get power levels for target room
+  const powerLevelsRow = await db.prepare(
+    `SELECT e.content FROM room_state rs
+     JOIN events e ON rs.event_id = e.event_id
+     WHERE rs.room_id = ? AND rs.event_type = 'm.room.power_levels'`
+  ).bind(targetRoomId).first<{ content: string }>();
+
+  let invitePowerLevel = 0;
+  let userPowerLevels: Record<string, number> = {};
+  let usersDefault = 0;
+
+  if (powerLevelsRow) {
+    try {
+      const powerLevels = JSON.parse(powerLevelsRow.content) as RoomPowerLevelsContent;
+      invitePowerLevel = powerLevels.invite ?? 0;
+      userPowerLevels = powerLevels.users ?? {};
+      usersDefault = powerLevels.users_default ?? 0;
+    } catch {
+      // Use defaults
+    }
+  }
+
+  // Find local users who are joined and have invite power
+  const localUserPattern = `@%:${localServerName}`;
+  const localMembers = await db.prepare(
+    `SELECT user_id FROM room_memberships
+     WHERE room_id = ? AND membership = 'join' AND user_id LIKE ?`
+  ).bind(targetRoomId, localUserPattern).all<{ user_id: string }>();
+
+  for (const member of localMembers.results) {
+    const userPower = userPowerLevels[member.user_id] ?? usersDefault;
+    if (userPower >= invitePowerLevel) {
+      return {
+        allowed: true,
+        authorisingUser: member.user_id,
+        allowedViaRoom,
+      };
+    }
+  }
+
+  // No local user with sufficient power found
+  // The join can still proceed via federation if a remote server has an authorising user
+  return {
+    allowed: true,
+    allowedViaRoom,
+    reason: 'No local authorising user found, federation may be required',
+  };
 }
