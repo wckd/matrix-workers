@@ -19,7 +19,6 @@ import {
   getRoomMembers,
   createRoomAlias,
   getRoomByAlias,
-  deleteRoomAlias,
   getEvent,
   getEventRaw,
   notifyUsersOfEvent,
@@ -1852,19 +1851,8 @@ app.put('/_matrix/client/v3/directory/room/:roomAlias', requireAuth(), async (c)
 });
 
 // DELETE /_matrix/client/v3/directory/room/:roomAlias
-app.delete('/_matrix/client/v3/directory/room/:roomAlias', requireAuth(), async (c) => {
-  // Note: userId could be used for permission checks in future
-  void c.get('userId');
-  const alias = decodeURIComponent(c.req.param('roomAlias'));
-
-  const roomId = await getRoomByAlias(c.env.DB, alias);
-  if (!roomId) {
-    return Errors.notFound('Room alias not found').toResponse();
-  }
-
-  await deleteRoomAlias(c.env.DB, alias);
-  return c.json({});
-});
+// NOTE: This endpoint is implemented in src/api/aliases.ts with proper permission checks
+// (creator OR room admin can delete). Do not add a duplicate here.
 
 // ============================================
 // Room Summary (MSC3266)
